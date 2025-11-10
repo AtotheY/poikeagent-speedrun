@@ -35,6 +35,7 @@ def get_phase_3_prompt(
     Returns:
         Complete formatted prompt string
     """
+    # Phase 3 Milestones: ROUTE_101, STARTER_CHOSEN, BIRCH_LAB_VISITED
     phase_intro = """🎮 PHASE 3: [PLACEHOLDER - Phase 3 Title]
 [PLACEHOLDER - Describe what the agent should focus on in this phase]
 - [PLACEHOLDER - Goal 1]

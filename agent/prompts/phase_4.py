@@ -35,6 +35,7 @@ def get_phase_4_prompt(
     Returns:
         Complete formatted prompt string
     """
+    # Phase 4 Milestones: OLDALE_TOWN, ROUTE_103, RECEIVED_POKEDEX
     phase_intro = """🎮 PHASE 4: [PLACEHOLDER - Phase 4 Title]
 [PLACEHOLDER - Describe what the agent should focus on in this phase]
 - [PLACEHOLDER - Goal 1]

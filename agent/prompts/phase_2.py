@@ -35,6 +35,7 @@ def get_phase_2_prompt(
     Returns:
         Complete formatted prompt string
     """
+    # Phase 2 Milestones: LITTLEROOT_TOWN, PLAYER_HOUSE_ENTERED, PLAYER_BEDROOM, CLOCK_SET, RIVAL_HOUSE, RIVAL_BEDROOM
     phase_intro = """🎮 PHASE 2: [PLACEHOLDER - Phase 2 Title]
 [PLACEHOLDER - Describe what the agent should focus on in this phase]
 - [PLACEHOLDER - Goal 1]

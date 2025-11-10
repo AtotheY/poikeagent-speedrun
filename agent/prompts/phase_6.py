@@ -35,6 +35,7 @@ def get_phase_6_prompt(
     Returns:
         Complete formatted prompt string
     """
+    # Phase 6 Milestones: ROUTE_104_SOUTH, PETALBURG_WOODS, TEAM_AQUA_GRUNT_DEFEATED, ROUTE_104_NORTH, RUSTBORO_CITY
     phase_intro = """🎮 PHASE 6: [PLACEHOLDER - Phase 6 Title]
 [PLACEHOLDER - Describe what the agent should focus on in this phase]
 - [PLACEHOLDER - Goal 1]

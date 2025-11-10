@@ -35,6 +35,7 @@ def get_phase_5_prompt(
     Returns:
         Complete formatted prompt string
     """
+    # Phase 5 Milestones: ROUTE_102, PETALBURG_CITY, DAD_FIRST_MEETING, GYM_EXPLANATION
     phase_intro = """🎮 PHASE 5: [PLACEHOLDER - Phase 5 Title]
 [PLACEHOLDER - Describe what the agent should focus on in this phase]
 - [PLACEHOLDER - Goal 1]

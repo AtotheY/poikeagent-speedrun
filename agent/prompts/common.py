@@ -65,24 +65,20 @@ def get_response_structure() -> str:
     Returns:
         Response structure prompt section
     """
-    return """IMPORTANT: Please think step by step before choosing your action. Structure your response like this:
+    # doubt we need these
+    #     OBJECTIVES:
+    # [Review your current objectives. You have main storyline objectives (story_*) that track overall Emerald progression - these are automatically verified and you CANNOT manually complete them.  There may be sub-objectives that you need to complete before the main milestone. You can create your own sub-objectives to help achieve the main goals. Do any need to be updated, added, or marked as complete?
+    # - Add sub-objectives: ADD_OBJECTIVE: type:description:target_value (e.g., "ADD_OBJECTIVE: location:Find Pokemon Center in town:(15,20)" or "ADD_OBJECTIVE: item:Buy Pokeballs:5")
+    # - Complete sub-objectives only: COMPLETE_OBJECTIVE: objective_id:notes (e.g., "COMPLETE_OBJECTIVE: my_sub_obj_123:Successfully bought Pokeballs")
+    # - NOTE: Do NOT try to complete storyline objectives (story_*) - they auto-complete when milestones are reached]
 
-ANALYSIS:
-[Analyze what you see in the frame and current game state - what's happening? where are you? what should you be doing? 
-IMPORTANT: Look carefully at the game image for objects (clocks, pokeballs, bags) and NPCs (people, trainers) that might not be shown on the map. NPCs appear as sprite characters and can block movement or trigger battles/dialogue. When you see them try determine their location (X,Y) on the map relative to the player and any objects.]
+    # PLAN:
+    # [Think about your immediate goal - what do you want to accomplish in the next few actions? Consider your current objectives and recent history. 
+    # Check MOVEMENT MEMORY for areas you've had trouble with before and plan your route accordingly.]
 
-OBJECTIVES:
-[Review your current objectives. You have main storyline objectives (story_*) that track overall Emerald progression - these are automatically verified and you CANNOT manually complete them.  There may be sub-objectives that you need to complete before the main milestone. You can create your own sub-objectives to help achieve the main goals. Do any need to be updated, added, or marked as complete?
-- Add sub-objectives: ADD_OBJECTIVE: type:description:target_value (e.g., "ADD_OBJECTIVE: location:Find Pokemon Center in town:(15,20)" or "ADD_OBJECTIVE: item:Buy Pokeballs:5")
-- Complete sub-objectives only: COMPLETE_OBJECTIVE: objective_id:notes (e.g., "COMPLETE_OBJECTIVE: my_sub_obj_123:Successfully bought Pokeballs")
-- NOTE: Do NOT try to complete storyline objectives (story_*) - they auto-complete when milestones are reached]
+    return """
 
-PLAN:
-[Think about your immediate goal - what do you want to accomplish in the next few actions? Consider your current objectives and recent history. 
-Check MOVEMENT MEMORY for areas you've had trouble with before and plan your route accordingly.]
-
-REASONING:
-[Explain why you're choosing this specific action. Reference the MOVEMENT PREVIEW and MOVEMENT MEMORY sections. Check the visual frame for NPCs before moving. If you see NPCs in the image, avoid walking into them. Consider any failed movements or known obstacles from your memory.]
+Please format your response like this:
 
 ACTION:
 [Your final action choice - PREFER SINGLE ACTIONS like 'RIGHT' or 'A'. Only use multiple actions like 'UP, UP, RIGHT' if you've verified each step is WALKABLE in the movement preview and map.]"""

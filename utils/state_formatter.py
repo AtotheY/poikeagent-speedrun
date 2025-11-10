@@ -1341,11 +1341,7 @@ def _format_game_state(game_data, state_data=None):
     
     # Add helpful prompt for title sequence
     player_location = player_data.get('location', '')
-    if player_location == 'TITLE_SEQUENCE':
-        context_parts.append("")
-        context_parts.append("💡 TIP: Make sure to choose a fun name for your character!")
-        context_parts.append("Be creative and have fun with the naming!")
-    
+
     # Add movement preview for overworld navigation (but not during title sequence)
     if (state_data and not is_in_battle and 
         game_data.get('game_state') == 'overworld' and 

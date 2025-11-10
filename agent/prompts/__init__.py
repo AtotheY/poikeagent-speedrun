@@ -31,29 +31,18 @@ PHASE_PROMPTS = {
 def get_phase_prompt(
     phase: int,
     debug: bool = False,
-    include_pathfinding_rules: bool = True,
-    include_response_structure: bool = True,
-    include_action_history: bool = True,
-    include_location_history: bool = True,
-    include_objectives: bool = True,
-    include_movement_memory: bool = True,
-    include_stuck_warning: bool = True,
     **kwargs
 ) -> str:
     """
     Get the prompt for a specific phase.
     
+    Each phase file controls its own include_* flags via function defaults.
+    This function just passes through debug and other kwargs to the phase function.
+    
     Args:
         phase: Phase number (1, 2, 3, etc.)
         debug: If True, log the prompt to console for debugging
-        include_pathfinding_rules: Include pathfinding rules (default: True)
-        include_response_structure: Include response structure (default: True)
-        include_action_history: Include action history (default: True)
-        include_location_history: Include location history (default: True)
-        include_objectives: Include objectives (default: True)
-        include_movement_memory: Include movement memory (default: True)
-        include_stuck_warning: Include stuck warning (default: True)
-        **kwargs: Other arguments to pass to the phase prompt function
+        **kwargs: Arguments to pass to the phase prompt function (recent_actions_str, etc.)
         
     Returns:
         Formatted prompt string
@@ -63,15 +52,6 @@ def get_phase_prompt(
         logger.warning(f"Phase {phase} not found, defaulting to phase 1")
         phase = 1
     
-    return PHASE_PROMPTS[phase](
-        debug=debug,
-        include_pathfinding_rules=include_pathfinding_rules,
-        include_response_structure=include_response_structure,
-        include_action_history=include_action_history,
-        include_location_history=include_location_history,
-        include_objectives=include_objectives,
-        include_movement_memory=include_movement_memory,
-        include_stuck_warning=include_stuck_warning,
-        **kwargs
-    )
+    # Just pass through debug and kwargs - each phase file sets its own include_* defaults
+    return PHASE_PROMPTS[phase](debug=debug, **kwargs)
 

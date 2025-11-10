@@ -881,9 +881,16 @@ class SimpleAgent:
                 print("🔍 Making VLM call...")
                 try:
                     # ⭐ LLM RESPONSE RECEIVED HERE ⭐
-                    # Line 801: This is where the LLM sends their response back
+                    # Line 885: This is where the LLM sends their response back
                     response = self.vlm.get_query(frame, prompt, "simple_mode")
-                    print(f"🔍 VLM response received: {response[:100]}..." if len(response) > 100 else f"🔍 VLM response: {response}")
+                    
+                    # Print full response for visibility
+                    print("\n" + "="*120)
+                    print("🤖 LLM FULL RESPONSE:")
+                    print("="*120)
+                    print(response)
+                    print("="*120 + "\n")
+                    
                 except Exception as e:
                     print(f"❌ VLM call failed: {e}")
                     return "WAIT"
@@ -893,6 +900,12 @@ class SimpleAgent:
             
             # Extract action(s) from structured response
             actions, reasoning = self._parse_structured_response(response, game_state)
+            
+            # Print parsed actions clearly
+            print(f"✅ PARSED ACTIONS: {actions}")
+            if reasoning:
+                print(f"💭 REASONING: {reasoning[:200]}..." if len(reasoning) > 200 else f"💭 REASONING: {reasoning}")
+            print()
             
             # Check for failed movement by comparing previous coordinates
             if len(self.state.history) > 0:

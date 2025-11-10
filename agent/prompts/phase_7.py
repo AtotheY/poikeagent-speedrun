@@ -35,6 +35,7 @@ def get_phase_7_prompt(
     Returns:
         Complete formatted prompt string
     """
+    # Phase 7 Milestones: RUSTBORO_GYM_ENTERED, ROXANNE_DEFEATED, FIRST_GYM_COMPLETE
     phase_intro = """🎮 PHASE 7: [PLACEHOLDER - Phase 7 Title]
 [PLACEHOLDER - Describe what the agent should focus on in this phase]
 - [PLACEHOLDER - Goal 1]

@@ -5,40 +5,17 @@ Phase 1 prompt - Early game (title sequence through first gym)
 from .common import build_base_prompt
 
 
-MILESTONES = [
-    # Phase 1: Game Initialization
-    'GAME_RUNNING', 'PLAYER_NAME_SET', 'INTRO_CUTSCENE_COMPLETE',
 
-    # Phase 2: Tutorial & Starting Town
-    'LITTLEROOT_TOWN', 'PLAYER_HOUSE_ENTERED', 'PLAYER_BEDROOM',
-    'CLOCK_SET', 'RIVAL_HOUSE', 'RIVAL_BEDROOM',
-
-    # Phase 3: Professor Birch & Starter
-    'ROUTE_101', 'STARTER_CHOSEN', 'BIRCH_LAB_VISITED',
-
-    # Phase 4: Rival
-    'OLDALE_TOWN', 'ROUTE_103', 'RECEIVED_POKEDEX',
-
-    # Phase 5: Route 102 & Petalburg
-    'ROUTE_102', 'PETALBURG_CITY', 'DAD_FIRST_MEETING', 'GYM_EXPLANATION',
-
-    # Phase 6: Road to Rustboro City
-    'ROUTE_104_SOUTH', 'PETALBURG_WOODS', 'TEAM_AQUA_GRUNT_DEFEATED',
-    'ROUTE_104_NORTH', 'RUSTBORO_CITY',
-
-    # Phase 7: First Gym Challenge
-    'RUSTBORO_GYM_ENTERED', 'ROXANNE_DEFEATED', 'FIRST_GYM_COMPLETE'
-]
 
 def get_phase_1_prompt(
     debug: bool = False,
-    include_pathfinding_rules: bool = True,
+    include_pathfinding_rules: bool = False,
     include_response_structure: bool = True,
-    include_action_history: bool = True,
-    include_location_history: bool = True,
-    include_objectives: bool = True,
-    include_movement_memory: bool = True,
-    include_stuck_warning: bool = True,
+    include_action_history: bool = False,
+    include_location_history: bool = False,
+    include_objectives: bool = False,
+    include_movement_memory: bool = False,
+    include_stuck_warning: bool = False,
     **kwargs
 ) -> str:
     """
@@ -60,11 +37,10 @@ def get_phase_1_prompt(
     Returns:
         Complete formatted prompt string
     """
-    phase_intro = """🎮 PHASE 1: [PLACEHOLDER - Phase 1 Title]
-[PLACEHOLDER - Describe what the agent should focus on in this phase]
-- [PLACEHOLDER - Goal 1]
-- [PLACEHOLDER - Goal 2]
-- [PLACEHOLDER - Goal 3]"""
+    # Phase 1 Milestones: GAME_RUNNING, PLAYER_NAME_SET, INTRO_CUTSCENE_COMPLETE
+    phase_intro = """🎮 PHASE 1: Your goal is to simply progress through thet title screen and name selection as fast as possible.
+    Spam A Until you're in the van, when you're in the moving van just move right a few times, 
+    then spam A until the cutscene with mom is done."""
     
     return build_base_prompt(
         phase_intro=phase_intro,

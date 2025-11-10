@@ -1000,20 +1000,20 @@ async def get_comprehensive_state():
                                 })
                             
                             state["portal_connections"] = map_id_connections
-                            print(f"🗺️ SERVER: Added portal connections to state: {map_id_connections}")
-                            print(f"🗺️ SERVER: State now has keys: {list(state.keys())}")
+                            logger.debug(f"Added portal connections to state: {map_id_connections}")
+                            logger.debug(f"State now has keys: {list(state.keys())}")
                             logger.debug(f"Loaded portal connections for {len(map_id_connections) if map_id_connections else 0} maps from persistent storage")
                         else:
-                            print(f"🗺️ SERVER: No warp connections found in map data")
+                            # No warp connections - only log at debug level to reduce noise
                             logger.debug("No warp connections found in map stitcher data")
                 else:
-                    print(f"🗺️ SERVER: Cache file not found at {cache_file}")
+                    # Cache file not found - only log at debug level to reduce noise
                     logger.debug(f"Map stitcher cache file not found: {cache_file}")
             except Exception as e:
                 import traceback
-                print(f"🗺️ SERVER: Error loading portal connections: {e}")
-                print(f"🗺️ SERVER: Full traceback: {traceback.format_exc()}")
+                # Only log errors at debug level unless it's a critical issue
                 logger.debug(f"Could not load portal connections from persistent storage: {e}")
+                logger.debug(f"Full traceback: {traceback.format_exc()}")
         
         # The battle information already contains all necessary data
         # No additional analysis needed - keep it clean
