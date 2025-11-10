@@ -1,36 +1,11 @@
 """
-Phase 1 prompt - Early game (title sequence through first gym)
+Phase 4 prompt - Rival encounter
 """
 
 from .common import build_base_prompt
 
 
-MILESTONES = [
-    # Phase 1: Game Initialization
-    'GAME_RUNNING', 'PLAYER_NAME_SET', 'INTRO_CUTSCENE_COMPLETE',
-
-    # Phase 2: Tutorial & Starting Town
-    'LITTLEROOT_TOWN', 'PLAYER_HOUSE_ENTERED', 'PLAYER_BEDROOM',
-    'CLOCK_SET', 'RIVAL_HOUSE', 'RIVAL_BEDROOM',
-
-    # Phase 3: Professor Birch & Starter
-    'ROUTE_101', 'STARTER_CHOSEN', 'BIRCH_LAB_VISITED',
-
-    # Phase 4: Rival
-    'OLDALE_TOWN', 'ROUTE_103', 'RECEIVED_POKEDEX',
-
-    # Phase 5: Route 102 & Petalburg
-    'ROUTE_102', 'PETALBURG_CITY', 'DAD_FIRST_MEETING', 'GYM_EXPLANATION',
-
-    # Phase 6: Road to Rustboro City
-    'ROUTE_104_SOUTH', 'PETALBURG_WOODS', 'TEAM_AQUA_GRUNT_DEFEATED',
-    'ROUTE_104_NORTH', 'RUSTBORO_CITY',
-
-    # Phase 7: First Gym Challenge
-    'RUSTBORO_GYM_ENTERED', 'ROXANNE_DEFEATED', 'FIRST_GYM_COMPLETE'
-]
-
-def get_phase_1_prompt(
+def get_phase_4_prompt(
     debug: bool = False,
     include_pathfinding_rules: bool = True,
     include_response_structure: bool = True,
@@ -42,9 +17,9 @@ def get_phase_1_prompt(
     **kwargs
 ) -> str:
     """
-    Get the Phase 1 prompt template.
+    Get the Phase 4 prompt template.
     
-    Phase 1 covers: [PLACEHOLDER - describe what phase 1 covers]
+    Phase 4 covers: [PLACEHOLDER - describe what phase 4 covers]
     
     Args:
         debug: If True, log the prompt to console
@@ -60,7 +35,7 @@ def get_phase_1_prompt(
     Returns:
         Complete formatted prompt string
     """
-    phase_intro = """🎮 PHASE 1: [PLACEHOLDER - Phase 1 Title]
+    phase_intro = """🎮 PHASE 4: [PLACEHOLDER - Phase 4 Title]
 [PLACEHOLDER - Describe what the agent should focus on in this phase]
 - [PLACEHOLDER - Goal 1]
 - [PLACEHOLDER - Goal 2]

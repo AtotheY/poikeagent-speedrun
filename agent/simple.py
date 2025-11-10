@@ -149,11 +149,30 @@ class SimpleAgent:
         # Movement memory clearing interval
         self.movement_memory_clear_interval = movement_memory_clear_interval
         
-        # Current phase for prompt selection (easy to switch with one line)
-        self.current_phase = 1  # Change this to switch phases: self.current_phase = 2, etc.
+        # Current phase for prompt selection (auto-updated based on milestones)
+        self.current_phase = 1  # Will be auto-updated based on milestone completion
         
         # Debug flag for prompt logging (set to True to see prompts in console)
-        self.debug_prompts = False  # Set to True to enable prompt debugging
+        self.debug_prompts = True  # Set to True to enable prompt debugging
+        
+        # Phase milestone mapping - defines which milestones belong to which phase
+        # Phase switches automatically when ALL milestones in current phase are complete
+        self.PHASE_MILESTONES = {
+            # Phase 1: Game Initialization
+            1: ['GAME_RUNNING', 'PLAYER_NAME_SET', 'INTRO_CUTSCENE_COMPLETE'],
+            # Phase 2: Tutorial & Starting Town
+            2: ['LITTLEROOT_TOWN', 'PLAYER_HOUSE_ENTERED', 'PLAYER_BEDROOM', 'CLOCK_SET', 'RIVAL_HOUSE', 'RIVAL_BEDROOM'],
+            # Phase 3: Professor Birch & Starter
+            3: ['ROUTE_101', 'STARTER_CHOSEN', 'BIRCH_LAB_VISITED'],
+            # Phase 4: Rival
+            4: ['OLDALE_TOWN', 'ROUTE_103', 'RECEIVED_POKEDEX'],
+            # Phase 5: Route 102 & Petalburg
+            5: ['ROUTE_102', 'PETALBURG_CITY', 'DAD_FIRST_MEETING', 'GYM_EXPLANATION'],
+            # Phase 6: Road to Rustboro City
+            6: ['ROUTE_104_SOUTH', 'PETALBURG_WOODS', 'TEAM_AQUA_GRUNT_DEFEATED', 'ROUTE_104_NORTH', 'RUSTBORO_CITY'],
+            # Phase 7: First Gym Challenge
+            7: ['RUSTBORO_GYM_ENTERED', 'ROXANNE_DEFEATED', 'FIRST_GYM_COMPLETE'],
+        }
         
         # Initialize storyline objectives for Emerald progression
         self._initialize_storyline_objectives()
@@ -535,6 +554,66 @@ class SimpleAgent:
 
         return completed_ids
     
+    def determine_current_phase(self, game_state: Dict[str, Any]) -> int:
+        """
+        Determine the current phase based on completed milestones.
+        
+        Returns the phase number to use based on milestone completion:
+        - If all Phase 1 milestones are complete → use Phase 2
+        - If all Phase 1 & 2 milestones are complete → use Phase 3
+        - etc.
+        - If no phases are fully complete → use Phase 1
+        
+        Args:
+            game_state: Current game state (to check milestone completion)
+            
+        Returns:
+            Phase number (1-7)
+        """
+        # Get milestones from game state
+        milestones = game_state.get("milestones", {})
+        if not milestones:
+            # No milestone data, default to phase 1
+            return 1
+        
+        # Check phases in order (1, 2, 3, ...)
+        # Find the first phase that is NOT fully complete
+        for phase_num in sorted(self.PHASE_MILESTONES.keys()):
+            phase_milestones = self.PHASE_MILESTONES[phase_num]
+            
+            # Check if all milestones in this phase are completed
+            all_complete = True
+            for milestone_id in phase_milestones:
+                milestone_data = milestones.get(milestone_id, {})
+                if not milestone_data.get("completed", False):
+                    all_complete = False
+                    break
+            
+            if not all_complete:
+                # This phase is not complete, use this phase's prompt
+                return phase_num
+        
+        # All phases are complete, use the last phase
+        return max(self.PHASE_MILESTONES.keys())
+    
+    def update_phase_from_milestones(self, game_state: Dict[str, Any]) -> bool:
+        """
+        Update current phase based on milestone completion.
+        
+        Args:
+            game_state: Current game state
+            
+        Returns:
+            True if phase was changed, False otherwise
+        """
+        new_phase = self.determine_current_phase(game_state)
+        if new_phase != self.current_phase:
+            old_phase = self.current_phase
+            self.current_phase = new_phase
+            logger.info(f"🔄 Phase switched: {old_phase} → {new_phase} (based on milestone completion)")
+            return True
+        return False
+    
     def detect_stuck_pattern(self, coords: Optional[Tuple[int, int]], context: str, game_state: Dict[str, Any] = None) -> bool:
         """Detect if the agent appears to be stuck in a location/context"""
         # Don't trigger stuck detection during contexts where staying in place is expected
@@ -750,6 +829,9 @@ class SimpleAgent:
             
             # Check storyline milestones and auto-complete objectives
             self.check_storyline_milestones(game_state)
+            
+            # Auto-update phase based on milestone completion
+            self.update_phase_from_milestones(game_state)
             
             # Get relevant history and stuck detection
             history_summary = self.get_relevant_history_summary(context, coords)
