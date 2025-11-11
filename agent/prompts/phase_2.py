@@ -27,7 +27,7 @@ def _is_objective_completed(objectives: List[Any], objective_id: str) -> bool:
     return False
 
 
-def _get_phase_2_conditional_prompts(objectives: List[Any]) -> str:
+def _get_phase_2_conditional_prompts(objectives: List[Any], current_location: str = None) -> str:
     """
     Generate conditional prompt sections based on completed objectives.
     
@@ -41,18 +41,27 @@ def _get_phase_2_conditional_prompts(objectives: List[Any]) -> str:
     
     Args:
         objectives: List of objective objects
+        current_location: Current location name (to detect moving van)
         
     Returns:
         Conditional prompt text based on current progress
     """
     conditional_sections = []
     
-    # Check each objective and add specific guidance
-    if not _is_objective_completed(objectives, "story_intro_complete"):
+    # Check if in moving van by location name (most reliable)
+    if current_location and "MOVING_VAN" in current_location.upper():
         conditional_sections.append("""
 🚚 MOVING VAN:
 - You're inside the moving van
-- Move RIGHT to exit the truck""")
+- ONLY MOVE RIGHT - DO "RIGHT, RIGHT, RIGHT, RIGHT, RIGHT" to exit the truck""")
+    
+    # Otherwise check objectives
+    elif not _is_objective_completed(objectives, "story_intro_complete"):
+        # Also moving van if objective not complete
+        conditional_sections.append("""
+🚚 MOVING VAN:
+- You're inside the moving van
+- ONLY MOVE RIGHT - DO "RIGHT, RIGHT, RIGHT, RIGHT, RIGHT" to exit the truck""")
     
     elif not _is_objective_completed(objectives, "story_player_house"):
         conditional_sections.append("""
@@ -64,22 +73,26 @@ def _get_phase_2_conditional_prompts(objectives: List[Any]) -> str:
 🏠 PLAYER'S HOUSE - 1ST FLOOR:
 - Go upstairs to your bedroom
 - Find the stairs tile (S) on the map
-- Move ONTO the stairs tile to go up""")
+- Move ONTO the stairs tile to go up
+- MOVE UP ONLY! "UP, UP, UP, UP, UP, UP, A"
+""")
     
     elif not _is_objective_completed(objectives, "story_clock_set"):
         conditional_sections.append("""
 🛏️ PLAYER'S BEDROOM - 2ND FLOOR:
 - You need to set the clock on the wall
-- Press A to interact with the clock
+- IF YOU ARE NOT DIRECTLY FACING THE CLOCK, MOVE TO IT BY GOING LEFT!. IT IS NOTED BYT K ON THE MAP.
+- Press UP ONLY if you are DIRECTLY below the clock. 
+- PRESS A to interact with the clock
 - Then press: A, UP, A to set it
 - After setting, go back downstairs and exit the house""")
     
     elif not _is_objective_completed(objectives, "story_rival_house"):
         conditional_sections.append("""
 🏘️ LITTLEROOT TOWN:
-- You've set your clock, now visit May's house next door
-- Look for the rival's house (should be nearby)
-- Walk into the entrance""")
+- You've set your clock, now visit May's house next door. LEAVE YOUR HOUSE if you are still in it.
+- IF you have left your house, and are in town, 
+go RIGHT until you are below a door and enter by goingUP""")
     
     elif not _is_objective_completed(objectives, "story_rival_bedroom"):
         conditional_sections.append("""
@@ -102,13 +115,16 @@ def _get_phase_2_conditional_prompts(objectives: List[Any]) -> str:
 def get_phase_2_prompt(
     objectives: List[Any] = None,
     debug: bool = False,
+    include_base_intro: bool = False,  # Control base game introduction
     include_pathfinding_rules: bool = False,
     include_response_structure: bool = True,
-    include_action_history: bool = True,
+    include_action_history: bool = False,
     include_location_history: bool = False,
     include_objectives: bool = False,
     include_movement_memory: bool = False,
     include_stuck_warning: bool = True,
+    include_phase_tips: bool = False,  # Control tips section
+    formatted_state: str = None,  # To extract location
     **kwargs
 ) -> str:
     """
@@ -126,19 +142,31 @@ def get_phase_2_prompt(
         include_objectives: Include objectives (default: False)
         include_movement_memory: Include movement memory (default: False)
         include_stuck_warning: Include stuck warning (default: True)
+        include_phase_tips: Include phase-specific tips section (default: False)
+        formatted_state: Formatted state string to extract location from
         **kwargs: All other prompt building arguments (passed to build_base_prompt)
         
     Returns:
         Complete formatted prompt string
     """
+    # Extract current location from formatted_state if available
+    current_location = None
+    if formatted_state and "Current Location:" in formatted_state:
+        # Extract location from "Current Location: MOVING_VAN" line
+        for line in formatted_state.split('\n'):
+            if line.strip().startswith("Current Location:"):
+                current_location = line.split(":", 1)[1].strip()
+                break
+    
     # Build base intro
     base_intro = "🎮 PHASE 2: Initial Setup in Littleroot Town"
     
-    # Add conditional prompts based on objectives
-    conditional_prompts = _get_phase_2_conditional_prompts(objectives or [])
+    # Add conditional prompts based on objectives and location
+    conditional_prompts = _get_phase_2_conditional_prompts(objectives or [], current_location)
     
-    # Combine intro with conditional sections
-    phase_intro = f"""{base_intro}
+    # Build phase intro - only add tips if requested
+    if include_phase_tips:
+        phase_intro = f"""{base_intro}
 
 {conditional_prompts}
 
@@ -147,10 +175,15 @@ def get_phase_2_prompt(
 - When going upstairs, move ONTO the stairs tile (S)
 - Use the coordinate system to find specific objects (like clocks)
 - Check the visual map to see where stairs (S) and doors (D) are located"""
+    else:
+        phase_intro = f"""{base_intro}
+
+{conditional_prompts}"""
     
     return build_base_prompt(
         phase_intro=phase_intro,
         debug=debug,
+        include_base_intro=include_base_intro,
         include_pathfinding_rules=include_pathfinding_rules,
         include_response_structure=include_response_structure,
         include_action_history=include_action_history,
@@ -158,6 +191,7 @@ def get_phase_2_prompt(
         include_objectives=include_objectives,
         include_movement_memory=include_movement_memory,
         include_stuck_warning=include_stuck_warning,
+        formatted_state=formatted_state,
         **kwargs
     )
 

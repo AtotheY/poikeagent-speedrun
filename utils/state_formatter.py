@@ -1391,6 +1391,8 @@ def get_movement_preview(state_data):
     Returns:
         dict: Direction -> preview info mapping
     """
+    from utils.map_formatter import format_map_grid, format_tile_to_symbol
+    
     # Get current player position
     player_data = state_data.get('player', {})
     player_position = _get_player_position(player_data)
@@ -1401,6 +1403,7 @@ def get_movement_preview(state_data):
     
     current_x = int(player_position['x'])
     current_y = int(player_position['y'])
+    player_coords = (current_x, current_y)
     
     # Get map and tile data
     map_info = state_data.get('map', {})
@@ -1410,54 +1413,84 @@ def get_movement_preview(state_data):
         # print( Movement preview - No tiles. map_info keys: {list(map_info.keys()) if map_info else 'None'}")
         return {}
     
-    directions = {
-        'UP': (0, -1),
-        'DOWN': (0, 1), 
-        'LEFT': (-1, 0),
-        'RIGHT': (1, 0)
+    # Get NPCs for the grid
+    npcs = state_data.get('map', {}).get('npcs', [])
+    location_name = state_data.get('player', {}).get('location', '')
+    
+    # IMPORTANT: Generate the same trimmed grid that the visual map uses
+    # This ensures coordinates match exactly between the visual map and movement preview
+    grid = format_map_grid(raw_tiles, "South", npcs, player_coords, location_name=location_name)
+    
+    if not grid:
+        return {}
+    
+    grid_height = len(grid)
+    grid_width = len(grid[0]) if grid else 0
+    
+    # Find player position in the trimmed grid
+    player_grid_x = None
+    player_grid_y = None
+    
+    for y_idx, row in enumerate(grid):
+        for x_idx, symbol in enumerate(row):
+            if symbol == 'P':
+                player_grid_x = x_idx
+                player_grid_y = grid_height - 1 - y_idx  # Flipped Y-axis
+                break
+        if player_grid_x is not None:
+            break
+    
+    if player_grid_x is None or player_grid_y is None:
+        return {}
+    
+    # Grid movement directions (how to move in the grid array)
+    directions_grid = {
+        'UP': (0, -1),      # Up in grid = decrease row index
+        'DOWN': (0, 1),     # Down in grid = increase row index  
+        'LEFT': (-1, 0),    # Left = decrease column
+        'RIGHT': (1, 0)     # Right = increase column
+    }
+    
+    # Display coordinate changes (flipped Y-axis for intuitive movement)
+    directions_display = {
+        'UP': (0, 1),       # UP increases display Y
+        'DOWN': (0, -1),    # DOWN decreases display Y
+        'LEFT': (-1, 0),    # LEFT decreases X
+        'RIGHT': (1, 0)     # RIGHT increases X
     }
     
     movement_preview = {}
     
-    # Player is at center of the 15x15 grid
-    center_x = len(raw_tiles[0]) // 2 if raw_tiles and raw_tiles[0] else 7
-    center_y = len(raw_tiles) // 2 if raw_tiles else 7
-    
     # Get the tile the player is currently standing on
-    current_tile_symbol = None
-    if (0 <= center_y < len(raw_tiles) and 
-        0 <= center_x < len(raw_tiles[center_y]) and
-        raw_tiles[center_y] and raw_tiles[center_y][center_x]):
-        current_tile = raw_tiles[center_y][center_x]
-        current_tile_symbol = format_tile_to_symbol(current_tile)
+    player_y_idx = grid_height - 1 - player_grid_y  # Convert display Y back to grid index
+    current_tile_symbol = grid[player_y_idx][player_grid_x] if player_y_idx < len(grid) else None
     
-    for direction, (dx, dy) in directions.items():
-        # Calculate new world coordinates
-        new_world_x = current_x + dx
-        new_world_y = current_y + dy
+    for direction in ['UP', 'DOWN', 'LEFT', 'RIGHT']:
+        dx_grid, dy_grid = directions_grid[direction]
+        dx_display, dy_display = directions_display[direction]
         
-        # Calculate grid position in the tile array
-        grid_x = center_x + dx
-        grid_y = center_y + dy
+        # Calculate new display coordinates (what agent sees)
+        new_display_x = player_grid_x + dx_display
+        new_display_y = player_grid_y + dy_display
+        
+        # Calculate grid position in the trimmed grid array (internal)
+        new_y_idx = player_y_idx + dy_grid  # Grid array index
+        new_x_idx = player_grid_x + dx_grid
         
         preview_info = {
-            'new_coords': (new_world_x, new_world_y),
+            'new_coords': (new_display_x, new_display_y),
             'blocked': True,
             'tile_symbol': '#',
             'tile_description': 'BLOCKED - Out of bounds'
         }
         
-        # Check if the target position is within the grid bounds
-        if (0 <= grid_y < len(raw_tiles) and 
-            0 <= grid_x < len(raw_tiles[grid_y]) and
-            raw_tiles[grid_y]):
+        # Check if the target position is within the trimmed grid bounds
+        if (0 <= new_y_idx < len(grid) and 
+            0 <= new_x_idx < len(grid[new_y_idx])):
             
             try:
-                # Get the tile at the target position
-                target_tile = raw_tiles[grid_y][grid_x]
-                
-                # Get tile symbol and check if walkable
-                tile_symbol = format_tile_to_symbol(target_tile)
+                # Get the symbol at the target position in the trimmed grid
+                tile_symbol = grid[new_y_idx][new_x_idx]
                 
                 # Determine if movement is blocked
                 is_blocked = tile_symbol in ['#', 'W']  # Walls and water block movement
@@ -1492,54 +1525,31 @@ def get_movement_preview(state_data):
                     else:
                         is_blocked = True  # Block diagonal movements for basic directional ledges
                 
-                # Get tile description
-                if len(target_tile) >= 2:
-                    tile_id, behavior = target_tile[:2]
-                    
-                    # Convert behavior to readable description
-                    if hasattr(behavior, 'name'):
-                        behavior_name = behavior.name
-                    elif isinstance(behavior, int):
-                        try:
-                            behavior_enum = MetatileBehavior(behavior)
-                            behavior_name = behavior_enum.name
-                        except (ValueError, ImportError):
-                            behavior_name = f"BEHAVIOR_{behavior}"
-                    else:
-                        behavior_name = str(behavior)
-                    
-                    # Create human-readable description
-                    # Check if we're overriding blocking due to being on stairs/door
-                    is_override = current_tile_symbol in ['S', 'D'] and not is_blocked and tile_symbol in ['#', 'W']
-                    
-                    if is_override:
-                        # We're on stairs/door and this normally blocked tile is walkable
-                        if tile_symbol == '#':
-                            tile_description = f"Walkable - Warp/Door exit (normally blocked) (ID: {tile_id})"
-                        elif tile_symbol == 'W':
-                            tile_description = f"Walkable - Warp/Door exit over water (ID: {tile_id})"
-                    elif tile_symbol == '.':
-                        tile_description = f"Walkable path (ID: {tile_id})"
-                    elif tile_symbol == '#':
-                        tile_description = f"BLOCKED - Wall/Obstacle (ID: {tile_id}, {behavior_name})"
+                # Get tile description from symbol legend
+                from utils.map_formatter import get_symbol_legend
+                symbol_legend = get_symbol_legend()
+                base_description = symbol_legend.get(tile_symbol, "Unknown")
+                
+                # Create human-readable description
+                # Check if we're overriding blocking due to being on stairs/door
+                is_override = current_tile_symbol in ['S', 'D'] and not is_blocked and tile_symbol in ['#', 'W']
+                
+                if is_override:
+                    # We're on stairs/door and this normally blocked tile is walkable
+                    if tile_symbol == '#':
+                        tile_description = "Warp/Door exit (normally blocked)"
                     elif tile_symbol == 'W':
-                        tile_description = f"BLOCKED - Water (need Surf) (ID: {tile_id})"
-                    elif tile_symbol == '~':
-                        tile_description = f"Walkable - Tall grass (wild encounters) (ID: {tile_id})"
-                    elif tile_symbol == 'D':
-                        tile_description = f"Walkable - Door/Entrance (ID: {tile_id})"
-                    elif tile_symbol == 'S':
-                        tile_description = f"Walkable - Stairs/Warp (ID: {tile_id})"
-                    elif tile_symbol in ['↓', '↑', '←', '→', '↗', '↖', '↘', '↙']:
-                        # Ledge description based on whether movement is allowed
-                        if is_blocked:
-                            tile_description = f"BLOCKED - Jump ledge {tile_symbol} (wrong direction) (ID: {tile_id})"
-                        else:
-                            tile_description = f"Walkable - Jump ledge {tile_symbol} (correct direction) (ID: {tile_id})"
+                        tile_description = "Warp/Door exit over water"
                     else:
-                        tile_description = f"Walkable - {behavior_name} (ID: {tile_id})"
+                        tile_description = base_description
+                elif tile_symbol in ['↓', '↑', '←', '→', '↗', '↖', '↘', '↙']:
+                    # Ledge description based on whether movement is allowed
+                    if is_blocked:
+                        tile_description = f"{base_description} (wrong direction)"
+                    else:
+                        tile_description = f"{base_description} (correct direction)"
                 else:
-                    tile_description = "Unknown tile"
+                    tile_description = base_description
                 
                 preview_info.update({
                     'blocked': is_blocked,
@@ -1548,7 +1558,7 @@ def get_movement_preview(state_data):
                 })
                 
             except (IndexError, TypeError) as e:
-                logger.warning(f"Error analyzing tile at {grid_x}, {grid_y}: {e}")
+                logger.warning(f"Error analyzing tile at ({new_x_idx}, {new_y_idx}): {e}")
                 # Keep default blocked values
                 pass
         

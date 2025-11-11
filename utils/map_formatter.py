@@ -525,6 +525,10 @@ def format_map_coordinate_list(raw_tiles, player_coords=None, location_name=None
     if not grid:
         return "No map data available"
     
+    # Get grid dimensions first
+    grid_height = len(grid)
+    grid_width = len(grid[0]) if grid else 0
+    
     # Get symbol legend for descriptions
     symbol_legend = get_symbol_legend()
     
@@ -539,10 +543,11 @@ def format_map_coordinate_list(raw_tiles, player_coords=None, location_name=None
     player_grid_y = None
     
     # Parse the grid to build coordinate list
+    # Flip Y-axis so UP increases Y (more intuitive for gameplay)
     for y_idx, row in enumerate(grid):
         for x_idx, symbol in enumerate(row):
             coord_x = x_idx
-            coord_y = y_idx
+            coord_y = grid_height - 1 - y_idx  # Flip Y-axis: bottom row = 0, top row = max
             
             # Get description
             description = symbol_legend.get(symbol, "Unknown")
@@ -565,12 +570,9 @@ def format_map_coordinate_list(raw_tiles, player_coords=None, location_name=None
     # Build output - include both grid and coordinate list
     lines = []
     
-    grid_height = len(grid)
-    grid_width = len(grid[0]) if grid else 0
-    
     lines.append("--- VISUAL MAP (ASCII Grid) ---")
     lines.append("")
-    # Use 0,0 top-left coordinate system
+    # Use 0,0 bottom-left coordinate system (Y increases upward)
     if grid_width <= 20 and grid_height <= 20:  # Only for reasonably sized maps
         # Add column coordinate header (0,1,2,3...)
         header = "     "
@@ -579,10 +581,11 @@ def format_map_coordinate_list(raw_tiles, player_coords=None, location_name=None
         lines.append(header)
         lines.append("")
     
-    # Add grid rows with row coordinates (0,1,2,3...)
+    # Add grid rows with flipped Y coordinates (bottom = 0, top = max)
     for y_idx, row in enumerate(grid):
-        # Show row coordinate on left
-        row_str = f"{y_idx:>3}  " + "  ".join(row)
+        # Flip Y coordinate display: top row shows highest Y value
+        display_y = grid_height - 1 - y_idx
+        row_str = f"{display_y:>3}  " + "  ".join(row)
         lines.append(row_str)
     
     lines.append("")
@@ -606,14 +609,14 @@ def format_map_coordinate_list(raw_tiles, player_coords=None, location_name=None
         lines.append("")
     
     # Only show walkable tiles if the map is sparse (fewer than 50 walkable)
-    if walkable_tiles and len(walkable_tiles) < 50:
-        lines.append("Walkable Tiles:")
-        # Show a sample, not all
-        for tile in walkable_tiles[:20]:
-            lines.append(tile)
-        if len(walkable_tiles) > 20:
-            lines.append(f"  ... and {len(walkable_tiles) - 20} more walkable tiles")
-        lines.append("")
+    # if walkable_tiles and len(walkable_tiles) < 50:
+    #     lines.append("Walkable Tiles:")
+    #     # Show a sample, not all
+    #     for tile in walkable_tiles[:20]:
+    #         lines.append(tile)
+    #     if len(walkable_tiles) > 20:
+    #         lines.append(f"  ... and {len(walkable_tiles) - 20} more walkable tiles")
+    #     lines.append("")
     
     # Blocked tiles - just show count and bounds
     if blocked_tiles:
@@ -625,15 +628,15 @@ def format_map_coordinate_list(raw_tiles, player_coords=None, location_name=None
         lines.append(f"  Area bounds: X=[{min_x},{max_x}], Y=[{min_y},{max_y}]")
     
     lines.append("")
-    lines.append("Coordinate System: (0,0) is top-left corner")
-    lines.append("Movement: UP=(x,y-1), DOWN=(x,y+1), LEFT=(x-1,y), RIGHT=(x+1,y)")
+    lines.append("Coordinate System: (0,0) is bottom-left corner, Y increases upward")
+    lines.append("Movement: UP=(x,y+1), DOWN=(x,y-1), LEFT=(x-1,y), RIGHT=(x+1,y)")
     
     # Add directional preview if we know player position
     if player_grid_x is not None and player_grid_y is not None:
         lines.append("")
         lines.append("From your position:")
-        lines.append(f"  UP    = ({player_grid_x},{player_grid_y-1})")
-        lines.append(f"  DOWN  = ({player_grid_x},{player_grid_y+1})")
+        lines.append(f"  UP    = ({player_grid_x},{player_grid_y+1})")
+        lines.append(f"  DOWN  = ({player_grid_x},{player_grid_y-1})")
         lines.append(f"  LEFT  = ({player_grid_x-1},{player_grid_y})")
         lines.append(f"  RIGHT = ({player_grid_x+1},{player_grid_y})")
     

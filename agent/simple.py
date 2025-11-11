@@ -540,8 +540,24 @@ class SimpleAgent:
         for obj in self.get_active_objectives():
             # Only check storyline objectives with milestone IDs
             if obj.storyline and obj.milestone_id and not obj.completed:
-                # Check if the corresponding emulator milestone is completed
-                milestone_completed = milestones.get(obj.milestone_id, {}).get("completed", False)
+                # Get milestone data
+                milestone_data = milestones.get(obj.milestone_id, {})
+                
+                # Validate milestone completion - require proper data structure with timestamp
+                milestone_completed = False
+                if isinstance(milestone_data, dict):
+                    has_completed_flag = milestone_data.get("completed", False)
+                    has_timestamp = milestone_data.get("timestamp") is not None
+                    
+                    # Only trust completion if it has both completed flag AND timestamp
+                    # This prevents false positives from empty/incomplete milestone data
+                    milestone_completed = has_completed_flag and has_timestamp
+                    
+                    if has_completed_flag and not has_timestamp:
+                        logger.warning(f"Milestone {obj.milestone_id} has completed=True but no timestamp - ignoring")
+                elif isinstance(milestone_data, bool):
+                    # Legacy boolean format - accept it
+                    milestone_completed = milestone_data
 
                 if milestone_completed:
                     # Auto-complete the storyline objective
@@ -586,9 +602,12 @@ class SimpleAgent:
             all_complete = True
             for milestone_id in phase_milestones:
                 milestone_data = milestones.get(milestone_id, {})
-                # Handle different possible data structures
+                # Handle different possible data structures with validation
                 if isinstance(milestone_data, dict):
-                    is_completed = milestone_data.get("completed", False)
+                    has_completed_flag = milestone_data.get("completed", False)
+                    has_timestamp = milestone_data.get("timestamp") is not None
+                    # Require both completed flag AND timestamp for dict format
+                    is_completed = has_completed_flag and has_timestamp
                 elif isinstance(milestone_data, bool):
                     is_completed = milestone_data
                 else:
@@ -634,9 +653,11 @@ class SimpleAgent:
             milestone_status = []
             for milestone_id in phase_1_milestones:
                 milestone_data = milestones.get(milestone_id, {})
-                # Handle different data structures
+                # Handle different data structures with validation
                 if isinstance(milestone_data, dict):
-                    is_completed = milestone_data.get("completed", False)
+                    has_completed_flag = milestone_data.get("completed", False)
+                    has_timestamp = milestone_data.get("timestamp") is not None
+                    is_completed = has_completed_flag and has_timestamp
                 elif isinstance(milestone_data, bool):
                     is_completed = milestone_data
                 else:
@@ -885,8 +906,11 @@ class SimpleAgent:
                     completed_count = 0
                     for milestone_id in phase_milestones:
                         milestone_data = milestones.get(milestone_id, {})
+                        # Use same validation logic: require timestamp for dict format
                         if isinstance(milestone_data, dict):
-                            is_completed = milestone_data.get("completed", False)
+                            has_completed_flag = milestone_data.get("completed", False)
+                            has_timestamp = milestone_data.get("timestamp") is not None
+                            is_completed = has_completed_flag and has_timestamp
                         elif isinstance(milestone_data, bool):
                             is_completed = milestone_data
                         else:
@@ -1703,11 +1727,11 @@ class SimpleAgent:
         if first_move not in walkable and first_move in ['UP', 'DOWN', 'LEFT', 'RIGHT']:
             return False, f"First movement {first_move} is not confirmed WALKABLE"
         
-        # For multiple movements, only allow if we're very confident
+        # For multiple movements, allow them - the LLM knows what it's doing
+        # Previously this was disabled, but if the LLM explicitly returns multiple moves,
+        # we should respect that decision
         if len(movements) > 1:
-            # We can't predict beyond the first move accurately
-            # So we should discourage chaining unless explicitly safe
-            return False, "Cannot validate multi-step movements - use single steps instead"
+            logger.info(f"Multi-step movement sequence: {movements} - allowing as per LLM decision")
         
         return True, "Movement validated"
 

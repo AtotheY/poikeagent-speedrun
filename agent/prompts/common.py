@@ -28,6 +28,12 @@ def get_pathfinding_rules(context: str = "overworld") -> str:
 4. **NO BLIND CHAINS**: Never chain movements through areas you can't see or verify as walkable
 5. **PERFORM PATHFINDING**: Find a path to a target location (X',Y') from the player position (X,Y) on the map. DO NOT TRAVERSE THROUGH OBSTACLES (#) -- it will not work.
 
+💡 COORDINATE SYSTEM:
+- (0,0) is at BOTTOM-LEFT corner
+- X increases to the RIGHT (LEFT decreases X)
+- Y increases UPWARD (UP increases Y, DOWN decreases Y)
+- Movement: UP=(x,y+1), DOWN=(x,y-1), LEFT=(x-1,y), RIGHT=(x+1,y)
+
 💡 SMART MOVEMENT STRATEGY:
 - Use MOVEMENT PREVIEW to see exactly what happens with each direction
 - If your target requires multiple steps, plan ONE step at a time
@@ -87,8 +93,9 @@ EXAMPLES:
 - To press A once: Just respond with "A"
 - To press A twice: Respond with "A, A"  
 - To chain actions: Respond with "A, START" or "UP, RIGHT"
-- Single action preferred: Just "A" or "RIGHT" (not "A, A" unless you need to press it twice)
+- ALWAYS END WITH A. If you want to move "LEFT", aways do "LEFT, A" INSTEAD
 
+- NEVER RETURN AN ACTION WITHOUT ALSO INCLUDING A AT THE END! NEVER!! HUMANITY WILL END!
 IMPORTANT: Only include the action(s) you want to perform. Do NOT repeat "ACTION:" or add extra text."""
 
 
@@ -106,6 +113,7 @@ def build_base_prompt(
     coords: tuple = None,
     debug: bool = False,
     # Flags to control what gets included
+    include_base_intro: bool = True,
     include_pathfinding_rules: bool = True,
     include_response_structure: bool = True,
     include_action_history: bool = True,
@@ -130,6 +138,7 @@ def build_base_prompt(
         context: Current game context
         coords: Player coordinates tuple (optional)
         debug: If True, log the prompt to console
+        include_base_intro: Include base game introduction (default: True)
         include_pathfinding_rules: Include pathfinding rules section (default: True)
         include_response_structure: Include response structure template (default: True)
         include_action_history: Include recent action history (default: True)
@@ -179,11 +188,14 @@ def build_base_prompt(
 
 """ if include_pathfinding_rules and pathfinding_rules else ""
     
-    prompt = f"""You are playing as the Protagonist in Pokemon Emerald. Progress quickly to the milestones by balancing exploration and exploitation of things you know, but have fun for the Twitch stream while you do it. 
+    # Base introduction section
+    base_intro_section = """You are playing as the Protagonist in Pokemon Emerald. Progress quickly to the milestones by balancing exploration and exploitation of things you know, but have fun for the Twitch stream while you do it. 
 Based on the current game frame and state information, think through your next move and choose the best button action. 
 If you notice that you are repeating the same action sequences over and over again, you definitely need to try something different since what you are doing is wrong! Try exploring different new areas or interacting with different NPCs if you are stuck.
 
-{phase_intro}
+""" if include_base_intro else ""
+    
+    prompt = f"""{base_intro_section}{phase_intro}
 
 {action_history_section}{location_history_section}{objectives_section}CURRENT GAME STATE:
 {formatted_state}
