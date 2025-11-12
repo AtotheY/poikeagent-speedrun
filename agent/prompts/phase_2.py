@@ -78,21 +78,25 @@ def _get_phase_2_conditional_prompts(objectives: List[Any], current_location: st
 """)
     
     elif not _is_objective_completed(objectives, "story_clock_set"):
-        conditional_sections.append("""
+                conditional_sections.append("""
 🛏️ PLAYER'S BEDROOM - 2ND FLOOR:
-- You need to set the clock on the wall
-- IF YOU ARE NOT DIRECTLY FACING THE CLOCK, MOVE TO IT BY GOING LEFT!. IT IS NOTED BYT K ON THE MAP.
-- Press UP ONLY if you are DIRECTLY below the clock. 
-- PRESS A to interact with the clock
-- Then press: A, UP, A to set it
-- After setting, go back downstairs and exit the house""")
+- you need tO LEAVE THE HOUSE. FIRST getg to the stairs and move UP. Then when you are on 1F, aka floor 1, go DOWN to D 
+""")
+
+#         conditional_sections.append("""
+# 🛏️ PLAYER'S BEDROOM - 2ND FLOOR:
+# - You need to set the clock on the wall
+# - IF YOU ARE NOT DIRECTLY FACING THE CLOCK, MOVE TO IT BY GOING LEFT!. IT IS NOTED BYT K ON THE MAP.
+# - Press UP ONLY if you are DIRECTLY below the clock. 
+# - PRESS A to interact with the clock
+# - Then press: A, UP, A, START to set it
+# - You can tell the clock has been set because START will be in your history
+# - Then go back downstairs and exit the house""")
     
     elif not _is_objective_completed(objectives, "story_rival_house"):
         conditional_sections.append("""
 🏘️ LITTLEROOT TOWN:
-- You've set your clock, now visit May's house next door. LEAVE YOUR HOUSE if you are still in it.
-- IF you have left your house, and are in town, 
-go RIGHT until you are below a door and enter by goingUP""")
+- If you are in BRENDENS house, get to the door and go DOWN. If you are in Littleroute, go right until you see a door and go UP into it.""")
     
     elif not _is_objective_completed(objectives, "story_rival_bedroom"):
         conditional_sections.append("""
@@ -118,7 +122,7 @@ def get_phase_2_prompt(
     include_base_intro: bool = False,  # Control base game introduction
     include_pathfinding_rules: bool = False,
     include_response_structure: bool = True,
-    include_action_history: bool = False,
+    include_action_history: bool = True,
     include_location_history: bool = False,
     include_objectives: bool = False,
     include_movement_memory: bool = False,
