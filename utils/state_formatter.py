@@ -1589,7 +1589,7 @@ def format_movement_preview_for_llm(state_data):
             info = preview[direction]
             new_x, new_y = info['new_coords']
             symbol = info['tile_symbol']
-            status = "BLOCKED" if info['blocked'] else "WALKABLE"
+            status = "BLOCKED - DO NOT GO THIS DIRECTION!" if info['blocked'] else "WALKABLE"
             
             lines.append(f"  {direction:5}: ({new_x:3},{new_y:3}) [{symbol}] {status}")
             # Add brief description for tiles
@@ -1614,6 +1614,286 @@ def format_movement_preview_for_llm(state_data):
                     lines[-1] += " - Jump ledge (can jump this way)"
     
     return "\n".join(lines)
+
+
+def astar_pathfind(grid, start_pos, goal_pos):
+    """
+    A* pathfinding to find path through walkable tiles.
+    
+    Args:
+        grid: 2D grid with symbols
+        start_pos: (x, y) in grid coordinates
+        goal_pos: (x, y) in grid coordinates
+        
+    Returns:
+        List of directions ['UP', 'RIGHT', 'DOWN', ...] or None if no path
+    """
+    from heapq import heappush, heappop
+    
+    start_x, start_y = start_pos
+    goal_x, goal_y = goal_pos
+    
+    # Check if goal is walkable
+    if goal_y >= len(grid) or goal_x >= len(grid[goal_y]):
+        return None
+    goal_tile = grid[goal_y][goal_x]
+    if goal_tile not in ['.', '~', 'P']:
+        return None
+    
+    # A* data structures
+    open_set = []
+    heappush(open_set, (0, start_pos))
+    came_from = {}
+    g_score = {start_pos: 0}
+    
+    def heuristic(pos):
+        # Manhattan distance
+        return abs(pos[0] - goal_x) + abs(pos[1] - goal_y)
+    
+    f_score = {start_pos: heuristic(start_pos)}
+    
+    # Direction mappings (grid coordinates)
+    directions = {
+        'UP': (0, -1),
+        'DOWN': (0, 1),
+        'LEFT': (-1, 0),
+        'RIGHT': (1, 0)
+    }
+    
+    while open_set:
+        _, current = heappop(open_set)
+        
+        if current == goal_pos:
+            # Reconstruct path
+            path = []
+            while current in came_from:
+                prev = came_from[current]
+                dx = current[0] - prev[0]
+                dy = current[1] - prev[1]
+                
+                # Find direction
+                for dir_name, (ddx, ddy) in directions.items():
+                    if dx == ddx and dy == ddy:
+                        path.append(dir_name)
+                        break
+                current = prev
+            
+            path.reverse()
+            return path
+        
+        curr_x, curr_y = current
+        
+        for dir_name, (dx, dy) in directions.items():
+            neighbor = (curr_x + dx, curr_y + dy)
+            nx, ny = neighbor
+            
+            # Check bounds
+            if ny < 0 or ny >= len(grid) or nx < 0 or nx >= len(grid[ny]):
+                continue
+            
+            # Check walkability - only . and ~ are walkable
+            tile = grid[ny][nx]
+            if tile not in ['.', '~', 'P']:
+                continue
+            
+            tentative_g = g_score[current] + 1
+            
+            if neighbor not in g_score or tentative_g < g_score[neighbor]:
+                came_from[neighbor] = current
+                g_score[neighbor] = tentative_g
+                f = tentative_g + heuristic(neighbor)
+                f_score[neighbor] = f
+                heappush(open_set, (f, neighbor))
+    
+    return None  # No path found
+
+
+def find_directional_goal(grid, player_pos, direction):
+    """
+    Find the best walkable goal in a given direction.
+    
+    Args:
+        grid: 2D grid
+        player_pos: (x, y) player position in grid
+        direction: 'UP', 'DOWN', 'LEFT', 'RIGHT'
+        
+    Returns:
+        (goal_x, goal_y) or None
+    """
+    px, py = player_pos
+    
+    if direction == 'UP':
+        # Find most northern walkable point
+        for y in range(len(grid)):
+            for x in range(len(grid[y])):
+                if grid[y][x] in ['.', '~']:
+                    return (x, y)
+    elif direction == 'DOWN':
+        # Find most southern walkable point
+        for y in range(len(grid) - 1, -1, -1):
+            for x in range(len(grid[y])):
+                if grid[y][x] in ['.', '~']:
+                    return (x, y)
+    elif direction == 'LEFT':
+        # Find most western walkable point
+        for x in range(len(grid[0])):
+            for y in range(len(grid)):
+                if x < len(grid[y]) and grid[y][x] in ['.', '~']:
+                    return (x, y)
+    elif direction == 'RIGHT':
+        # Find most eastern walkable point
+        for x in range(len(grid[0]) - 1, -1, -1):
+            for y in range(len(grid)):
+                if x < len(grid[y]) and grid[y][x] in ['.', '~']:
+                    return (x, y)
+    
+    return None
+
+
+def find_path_around_obstacle(state_data, target_direction):
+    """
+    Find a complete path to navigate in a given direction using A* pathfinding.
+    
+    When trying to go in a direction and it's blocked, finds the most extreme
+    walkable point in that direction and calculates the full path there.
+    
+    Args:
+        state_data: Complete game state data
+        target_direction: The direction you want to go ('UP', 'DOWN', 'LEFT', 'RIGHT')
+        
+    Returns:
+        dict: Path guidance with full action sequence
+    """
+    # Get movement preview which has accurate blocking info
+    movement_preview = get_movement_preview(state_data)
+    
+    if not movement_preview or target_direction not in movement_preview:
+        return None
+    
+    # Check if target direction is blocked using Movement Preview's logic
+    target_info = movement_preview.get(target_direction, {})
+    is_blocked = target_info.get('blocked', False)
+    
+    if not is_blocked:
+        # Target direction is clear, can proceed directly
+        return {
+            'is_blocked': False,
+            'instructions': f"{target_direction} is clear - proceed directly.",
+            'detour_needed': False,
+            'action_sequence': [target_direction]
+        }
+    
+    # Target is blocked - need to find a detour
+    player_data = state_data.get('player', {})
+    player_position = player_data.get('position', {})
+    
+    if not player_position or 'x' not in player_position or 'y' not in player_position:
+        return None
+    
+    current_x = int(player_position['x'])
+    current_y = int(player_position['y'])
+    player_coords = (current_x, current_y)
+    
+    # Get map and tile data for detour pathfinding
+    map_info = state_data.get('map', {})
+    raw_tiles = map_info.get('tiles', [])
+    
+    if not raw_tiles:
+        return None
+    
+    # Get NPCs for the grid
+    npcs = state_data.get('map', {}).get('npcs', [])
+    location_name = state_data.get('player', {}).get('location', '')
+    
+    # Generate the grid
+    from utils.map_formatter import format_map_grid
+    grid = format_map_grid(raw_tiles, "South", npcs, player_coords, location_name=location_name)
+    
+    if not grid:
+        return None
+    
+    grid_height = len(grid)
+    grid_width = len(grid[0]) if grid else 0
+    
+    # Find player position in the trimmed grid
+    player_grid_x = None
+    player_grid_y = None
+    
+    for y_idx, row in enumerate(grid):
+        for x_idx, symbol in enumerate(row):
+            if symbol == 'P':
+                player_grid_x = x_idx
+                player_grid_y = grid_height - 1 - y_idx  # Flipped Y-axis
+                break
+        if player_grid_x is not None:
+            break
+    
+    if player_grid_x is None or player_grid_y is None:
+        return None
+    
+    # Convert player position to grid array index
+    player_y_idx = grid_height - 1 - player_grid_y
+    
+    # Find the most extreme walkable point in the target direction
+    goal_pos = find_directional_goal(grid, (player_grid_x, player_y_idx), target_direction)
+    
+    if not goal_pos:
+        return {
+            'is_blocked': True,
+            'detour_needed': False,
+            'instructions': f"{target_direction} is blocked and no walkable destination found.",
+            'action_sequence': []
+        }
+    
+    # Use A* to find the full path
+    path = astar_pathfind(grid, (player_grid_x, player_y_idx), goal_pos)
+    
+    if not path or len(path) == 0:
+        return {
+            'is_blocked': True,
+            'detour_needed': False,
+            'instructions': f"{target_direction} is blocked and no clear path found.",
+            'action_sequence': []
+        }
+    
+    # Format the path as instructions
+    actions_str = ' '.join(path)
+    
+    instructions = (
+        f"To go {target_direction}: Follow this path: {actions_str}"
+    )
+    
+    return {
+        'is_blocked': True,
+        'detour_needed': True,
+        'instructions': instructions,
+        'action_sequence': path,
+        'path_length': len(path)
+    }
+
+
+def get_navigation_hints(state_data):
+    """
+    Get navigation hints for all four directions, suggesting paths around obstacles.
+    
+    Args:
+        state_data: Complete game state data
+        
+    Returns:
+        str: Formatted navigation hints for the LLM
+    """
+    hints = []
+    hints.append("🧭 NAVIGATION HINTS:")
+    
+    for direction in ['UP', 'DOWN', 'LEFT', 'RIGHT']:
+        path_info = find_path_around_obstacle(state_data, direction)
+        if path_info and path_info.get('detour_needed'):
+            hints.append(f"\n{direction}: {path_info['instructions']}")
+    
+    if len(hints) == 1:  # Only the header was added
+        return None  # No hints needed, all directions are clear or no path found
+    
+    return "\n".join(hints)
 
 
 def get_party_health_summary(state_data):

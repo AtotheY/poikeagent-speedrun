@@ -78,26 +78,29 @@ def _get_phase_2_conditional_prompts(objectives: List[Any], current_location: st
 """)
     
     elif not _is_objective_completed(objectives, "story_clock_set"):
-                conditional_sections.append("""
-🛏️ PLAYER'S BEDROOM - 2ND FLOOR:
-- you need tO LEAVE THE HOUSE. FIRST getg to the stairs and move UP. Then when you are on 1F, aka floor 1, go DOWN to D 
-""")
-
-#         conditional_sections.append("""
+#             conditional_sections.append("""
 # 🛏️ PLAYER'S BEDROOM - 2ND FLOOR:
-# - You need to set the clock on the wall
-# - IF YOU ARE NOT DIRECTLY FACING THE CLOCK, MOVE TO IT BY GOING LEFT!. IT IS NOTED BYT K ON THE MAP.
-# - Press UP ONLY if you are DIRECTLY below the clock. 
-# - PRESS A to interact with the clock
-# - Then press: A, UP, A, START to set it
-# - You can tell the clock has been set because START will be in your history
-# - Then go back downstairs and exit the house""")
+# - you need tO LEAVE THE HOUSE. FIRST getg to the stairs and move UP. Then when you are on 1F, aka floor 1, go DOWN to D 
+# """)
+
+        conditional_sections.append("""
+🛏️ PLAYER'S BEDROOM - 2ND FLOOR:
+- You need to set the clock on the wall
+- IF YOU ARE NOT DIRECTLY FACING THE CLOCK, MOVE TO IT BY GOING LEFT!. IT IS NOTED BY "K" ON THE MAP.
+- WHEN UNDER THE CLOCK: PRESS "UP, A, UP, A, SELECT" to set it
+
+- IF YOU NOTICE SELECT IN YOUR ACTION HISTORY, IT MEANS THE CLOCK HAS ALREADY BEEN SET. NEVER PRESS SELECT AGAIN OR MENTION IT.
+- you need tO LEAVE THE HOUSE. FIRST get to the stairs and move UP. Then when you are on 1F, aka floor 1, go DOWN to D.
+- In order to actually leave the house, you must be standing on the door tile (D) then move DOWN. 
+ """)
     
     elif not _is_objective_completed(objectives, "story_rival_house"):
         conditional_sections.append("""
 🏘️ LITTLEROOT TOWN:
-- If you are in BRENDENS house, get to the door and go DOWN. If you are in Littleroute, go right until you see a door and go UP into it.""")
-    
+- You need to visit May's house next door
+- Move to the right UNDER the door of her house then move UP top go inside of it
+""")
+
     elif not _is_objective_completed(objectives, "story_rival_bedroom"):
         conditional_sections.append("""
 🏠 MAY'S HOUSE:
@@ -129,6 +132,7 @@ def get_phase_2_prompt(
     include_stuck_warning: bool = True,
     include_phase_tips: bool = False,  # Control tips section
     formatted_state: str = None,  # To extract location
+    state_data = None,  # For pathfinding helper
     **kwargs
 ) -> str:
     """
@@ -196,6 +200,7 @@ def get_phase_2_prompt(
         include_movement_memory=include_movement_memory,
         include_stuck_warning=include_stuck_warning,
         formatted_state=formatted_state,
+        state_data=state_data,
         **kwargs
     )
 

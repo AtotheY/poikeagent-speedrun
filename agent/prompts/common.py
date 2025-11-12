@@ -3,6 +3,7 @@ Common prompt components shared across all phases
 """
 
 import logging
+from utils.state_formatter import find_path_around_obstacle
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,77 @@ EXAMPLE - DO THIS INSTEAD:
 """
 
 
+def get_pathfinding_helper(state_data) -> str:
+    """
+    Get pathfinding helper that shows how to get around obstacles in each direction.
+    
+    Args:
+        state_data: Complete game state data
+        
+    Returns:
+        Pathfinding helper string with navigation guidance for each direction
+    """
+    if not state_data:
+        return ""
+    
+    # Check if we're in overworld
+    game_data = state_data.get('game', {})
+    is_in_battle = game_data.get('is_in_battle', False) or game_data.get('in_battle', False)
+    game_state = game_data.get('game_state', '')
+    player_data = state_data.get('player', {})
+    player_location = player_data.get('location', '')
+    
+    # Only show in overworld, not in battles or title
+    if is_in_battle or game_state != 'overworld' or player_location == 'TITLE_SEQUENCE':
+        return ""
+    
+    lines = ["🧭 PATHFINDING HELPER:"]
+    
+    # Direction display name mapping
+    direction_names = {
+        'UP': 'NORTH',
+        'DOWN': 'SOUTH',
+        'LEFT': 'WEST',
+        'RIGHT': 'EAST'
+    }
+    
+    has_paths = False
+    
+    for direction in ['UP', 'DOWN', 'LEFT', 'RIGHT']:
+        display_name = direction_names[direction]
+        path_info = find_path_around_obstacle(state_data, direction)
+        
+        if not path_info:
+            continue
+            
+        if path_info.get('is_blocked') and path_info.get('detour_needed'):
+            # Show the complete path sequence
+            action_seq = path_info.get('action_sequence', [])
+            if action_seq and len(action_seq) > 0:
+                # Format as comma-separated action chain
+                actions_str = ', '.join(action_seq)
+                path_length = len(action_seq)
+                lines.append(f"To go {display_name}: Execute this {path_length}-step path: {actions_str}")
+                has_paths = True
+        elif not path_info.get('is_blocked'):
+            # Path is clear - can go directly
+            lines.append(f"To go {display_name}: Path is clear - just go {direction}")
+        else:
+            # Blocked with no path found
+            lines.append(f"To go {display_name}: Blocked (no clear path found)")
+    
+    if not has_paths:
+        # No complex paths found, don't show pathfinding helper
+        return ""
+    
+    # Add instruction for how to use paths
+    lines.append("")
+    lines.append("⚠️ IMPORTANT: If you want to go in a blocked direction, you MUST execute")
+    lines.append("the ENTIRE action sequence shown above. Do NOT stop halfway or change direction!")
+    
+    return '\n'.join(lines)
+
+
 def get_response_structure() -> str:
     """
     Get the response structure template for chain-of-thought reasoning.
@@ -84,19 +156,13 @@ def get_response_structure() -> str:
 
     return """
 
-Please format your response like this:
-
-ACTION:
-[Your final action choice - PREFER SINGLE ACTIONS like 'RIGHT' or 'A'. Only use multiple actions like 'UP, UP, RIGHT' if you've verified each step is WALKABLE in the movement preview and map.]
-
-EXAMPLES:
-- To press A once: Just respond with "A"
-- To press A twice: Respond with "A, A"  
-- To chain actions: Respond with "A, START" or "UP, RIGHT"
-- ALWAYS END WITH A. If you want to move "LEFT", aways do "LEFT, A" INSTEAD
-
+- NEVER GIVE ANY REASONING FOR YOUR ACTIONS! ONLY EVER RETURN THE ACTIONS U ARE TAKING.
+- EXAMPLE: DO NOT SAY "ACTIONS: UP, DOWN" JUST RETURN "UP, DOWN"
 - NEVER RETURN AN ACTION WITHOUT ALSO INCLUDING A AT THE END! NEVER!! HUMANITY WILL END!
-IMPORTANT: Only include the action(s) you want to perform. Do NOT repeat "ACTION:" or add extra text."""
+IMPORTANT: Only include the action(s) you want to perform. Do NOT repeat "ACTION:" or add extra text.
+
+IF THE PATH IN A DIRECTION IS "BLOCKED" DO NOT MOVE IN THAT DIRECTION. TRY A DIFFERENT DIRECTION THAT
+CAN GET YOU TO GO AROUND THE BLOCKED PATH."""
 
 
 def build_base_prompt(
@@ -115,12 +181,14 @@ def build_base_prompt(
     # Flags to control what gets included
     include_base_intro: bool = True,
     include_pathfinding_rules: bool = True,
+    include_pathfinding_helper: bool = True,
     include_response_structure: bool = True,
     include_action_history: bool = True,
     include_location_history: bool = True,
     include_objectives: bool = True,
     include_movement_memory: bool = True,
     include_stuck_warning: bool = True,
+    state_data = None,
 ) -> str:
     """
     Build the complete prompt using base template with phase-specific intro.
@@ -140,18 +208,21 @@ def build_base_prompt(
         debug: If True, log the prompt to console
         include_base_intro: Include base game introduction (default: True)
         include_pathfinding_rules: Include pathfinding rules section (default: True)
+        include_pathfinding_helper: Include pathfinding helper for obstacles (default: True)
         include_response_structure: Include response structure template (default: True)
         include_action_history: Include recent action history (default: True)
         include_location_history: Include location/context history (default: True)
         include_objectives: Include current objectives (default: True)
         include_movement_memory: Include movement memory (default: True)
         include_stuck_warning: Include stuck warning (default: True)
+        state_data: Game state data for pathfinding helper (optional)
         
     Returns:
         Complete formatted prompt string
     """
     # Conditionally build sections
     pathfinding_rules = get_pathfinding_rules(context) if include_pathfinding_rules else ""
+    pathfinding_helper = get_pathfinding_helper(state_data) if include_pathfinding_helper and state_data else ""
     response_structure = get_response_structure() if include_response_structure else ""
     
     coords_str = f"({coords[0]}, {coords[1]})" if coords else "Unknown"
@@ -188,6 +259,10 @@ def build_base_prompt(
 
 """ if include_pathfinding_rules and pathfinding_rules else ""
     
+    pathfinding_helper_section = f"""{pathfinding_helper}
+
+""" if include_pathfinding_helper and pathfinding_helper else ""
+    
     # Base introduction section
     base_intro_section = """You are playing as the Protagonist in Pokemon Emerald. Progress quickly to the milestones by balancing exploration and exploitation of things you know, but have fun for the Twitch stream while you do it. 
 Based on the current game frame and state information, think through your next move and choose the best button action. 
@@ -200,7 +275,7 @@ If you notice that you are repeating the same action sequences over and over aga
 {action_history_section}{location_history_section}{objectives_section}CURRENT GAME STATE:
 {formatted_state}
 
-{movement_memory_section}{stuck_warning_section}Available actions: A, B, START, SELECT, UP, DOWN, LEFT, RIGHT
+{movement_memory_section}{stuck_warning_section}{pathfinding_helper_section}Available actions: A, B, SELECT, UP, DOWN, LEFT, RIGHT
 
 {response_structure_section}{pathfinding_rules_section}Context: {context} | Coords: {coords_str}"""
     
@@ -212,6 +287,7 @@ If you notice that you are repeating the same action sequences over and over aga
         logger.info("=" * 120)
         logger.info("🔍 PROMPT CONFIGURATION:")
         logger.info(f"  include_pathfinding_rules: {include_pathfinding_rules}")
+        logger.info(f"  include_pathfinding_helper: {include_pathfinding_helper}")
         logger.info(f"  include_response_structure: {include_response_structure}")
         logger.info(f"  include_action_history: {include_action_history}")
         logger.info(f"  include_location_history: {include_location_history}")

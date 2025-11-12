@@ -1,0 +1,31 @@
+{
+  "checkpoint_timestamp": "2025-11-12T12:49:35.684343",
+  "session_id": "20251112_124604",
+  "original_log_file": "llm_logs/llm_log_20251112_124604.jsonl",
+  "total_entries": 2,
+  "agent_step_count": 59,
+  "cumulative_metrics": {
+    "total_tokens": 0,
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "total_cost": 0.0,
+    "total_actions": 164,
+    "start_time": 1762969564.65397,
+    "total_llm_calls": 0,
+    "total_run_time": 211.030371427536
+  },
+  "log_entries": [
+    {
+      "timestamp": "2025-11-12T12:46:04.651411",
+      "type": "session_start",
+      "session_id": "20251112_124604",
+      "log_file": "llm_logs/llm_log_20251112_124604.jsonl"
+    },
+    {
+      "timestamp": "2025-11-12T12:46:04.653971",
+      "type": "session_start",
+      "session_id": "20251112_124604",
+      "log_file": "llm_logs/llm_log_20251112_124604.jsonl"
+    }
+  ]
+}

@@ -963,7 +963,8 @@ class SimpleAgent:
                 actions_display_count=self.actions_display_count,
                 history_display_count=self.history_display_count,
                 context=context,
-                coords=coords
+                coords=coords,
+                state_data=game_state  # Pass state_data for pathfinding helper
             )
             
             # Print complete prompt to terminal for debugging
