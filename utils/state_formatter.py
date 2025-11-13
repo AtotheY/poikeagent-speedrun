@@ -1506,7 +1506,17 @@ def get_movement_preview(state_data):
                 
                 # Determine if movement is blocked
                 # Walls (#) and Water (W) block movement - doors (D) and stairs (S) are walkable
-                is_blocked = tile_symbol in ['#', 'W']
+                # SPECIAL: In specific locations (Littleroot, Route 101, Oldale), treat doors as blocked
+                location_upper = location_name.upper() if location_name else ""
+                treat_doors_as_blocked = ("LITTLEROOT" in location_upper or 
+                                         "ROUTE_101" in location_upper or 
+                                         "ROUTE 101" in location_upper or 
+                                         "OLDALE" in location_upper)
+                
+                if treat_doors_as_blocked:
+                    is_blocked = tile_symbol in ['#', 'W', 'D']
+                else:
+                    is_blocked = tile_symbol in ['#', 'W']
                 
                 # SPECIAL CASE: If player is standing on stairs/door, don't block the warp direction
                 # Stairs and doors often require moving in a specific direction to activate
@@ -1630,7 +1640,7 @@ def format_movement_preview_for_llm(state_data):
     return "\n".join(lines)
 
 
-def astar_pathfind(grid, start_pos, goal_pos):
+def astar_pathfind(grid, start_pos, goal_pos, location_name=''):
     """
     A* pathfinding to find path through walkable tiles.
     
@@ -1638,6 +1648,7 @@ def astar_pathfind(grid, start_pos, goal_pos):
         grid: 2D grid with symbols
         start_pos: (x, y) in grid coordinates
         goal_pos: (x, y) in grid coordinates
+        location_name: Current location name (for door-blocking logic)
         
     Returns:
         List of directions ['UP', 'RIGHT', 'DOWN', ...] or None if no path
@@ -1647,11 +1658,24 @@ def astar_pathfind(grid, start_pos, goal_pos):
     start_x, start_y = start_pos
     goal_x, goal_y = goal_pos
     
-    # Check if goal is walkable (allow doors and stairs as goals too)
+    # Determine if doors should be treated as blocked based on location
+    location_upper = location_name.upper() if location_name else ""
+    treat_doors_as_blocked = ("LITTLEROOT" in location_upper or 
+                             "ROUTE_101" in location_upper or 
+                             "ROUTE 101" in location_upper or 
+                             "OLDALE" in location_upper)
+    
+    # Determine walkable tiles based on location
+    if treat_doors_as_blocked:
+        walkable_tiles = ['.', '~', 'P', 'S']  # Exclude 'D' (doors)
+    else:
+        walkable_tiles = ['.', '~', 'P', 'D', 'S']  # Include 'D' (doors)
+    
+    # Check if goal is walkable
     if goal_y >= len(grid) or goal_x >= len(grid[goal_y]):
         return None
     goal_tile = grid[goal_y][goal_x]
-    if goal_tile not in ['.', '~', 'P', 'D', 'S']:
+    if goal_tile not in walkable_tiles:
         return None
     
     # A* data structures
@@ -1705,9 +1729,9 @@ def astar_pathfind(grid, start_pos, goal_pos):
             if ny < 0 or ny >= len(grid) or nx < 0 or nx >= len(grid[ny]):
                 continue
             
-            # Check walkability - allow walking through doors and stairs too
+            # Check walkability using location-specific walkable tiles
             tile = grid[ny][nx]
-            if tile not in ['.', '~', 'P', 'D', 'S']:
+            if tile not in walkable_tiles:
                 continue
             
             tentative_g = g_score[current] + 1
@@ -1722,7 +1746,7 @@ def astar_pathfind(grid, start_pos, goal_pos):
     return None  # No path found
 
 
-def find_directional_goal(grid, player_pos, direction):
+def find_directional_goal(grid, player_pos, direction, location_name=''):
     """
     Find the best walkable goal in a given direction.
     
@@ -1730,35 +1754,49 @@ def find_directional_goal(grid, player_pos, direction):
         grid: 2D grid
         player_pos: (x, y) player position in grid
         direction: 'UP', 'DOWN', 'LEFT', 'RIGHT'
+        location_name: Current location name (for door-blocking logic)
         
     Returns:
         (goal_x, goal_y) or None
     """
     px, py = player_pos
     
+    # Determine if doors should be treated as blocked based on location
+    location_upper = location_name.upper() if location_name else ""
+    treat_doors_as_blocked = ("LITTLEROOT" in location_upper or 
+                             "ROUTE_101" in location_upper or 
+                             "ROUTE 101" in location_upper or 
+                             "OLDALE" in location_upper)
+    
+    # Determine walkable tiles based on location
+    if treat_doors_as_blocked:
+        walkable_tiles = ['.', '~', 'S']  # Exclude 'D' (doors)
+    else:
+        walkable_tiles = ['.', '~', 'D', 'S']  # Include 'D' (doors)
+    
     if direction == 'UP':
         # Find most northern walkable point
         for y in range(len(grid)):
             for x in range(len(grid[y])):
-                if grid[y][x] in ['.', '~', 'D', 'S']:
+                if grid[y][x] in walkable_tiles:
                     return (x, y)
     elif direction == 'DOWN':
         # Find most southern walkable point
         for y in range(len(grid) - 1, -1, -1):
             for x in range(len(grid[y])):
-                if grid[y][x] in ['.', '~', 'D', 'S']:
+                if grid[y][x] in walkable_tiles:
                     return (x, y)
     elif direction == 'LEFT':
         # Find most western walkable point
         for x in range(len(grid[0])):
             for y in range(len(grid)):
-                if x < len(grid[y]) and grid[y][x] in ['.', '~', 'D', 'S']:
+                if x < len(grid[y]) and grid[y][x] in walkable_tiles:
                     return (x, y)
     elif direction == 'RIGHT':
         # Find most eastern walkable point
         for x in range(len(grid[0]) - 1, -1, -1):
             for y in range(len(grid)):
-                if x < len(grid[y]) and grid[y][x] in ['.', '~', 'D', 'S']:
+                if x < len(grid[y]) and grid[y][x] in walkable_tiles:
                     return (x, y)
     
     return None
@@ -1849,7 +1887,7 @@ def find_path_around_obstacle(state_data, target_direction):
     player_y_idx = grid_height - 1 - player_grid_y
     
     # Find the most extreme walkable point in the target direction
-    goal_pos = find_directional_goal(grid, (player_grid_x, player_y_idx), target_direction)
+    goal_pos = find_directional_goal(grid, (player_grid_x, player_y_idx), target_direction, location_name)
     
     if not goal_pos:
         return {
@@ -1859,8 +1897,8 @@ def find_path_around_obstacle(state_data, target_direction):
             'action_sequence': []
         }
     
-    # Use A* to find the full path
-    path = astar_pathfind(grid, (player_grid_x, player_y_idx), goal_pos)
+    # Use A* to find the full path (pass location for door-blocking logic)
+    path = astar_pathfind(grid, (player_grid_x, player_y_idx), goal_pos, location_name)
     
     if not path or len(path) == 0:
         return {

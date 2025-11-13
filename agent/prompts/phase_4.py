@@ -105,7 +105,7 @@ def _get_phase_4_suggested_action(state_data, current_location: str = None, obje
                 
                 # Use A* to pathfind to stairs
                 if stairs_pos:
-                    path = astar_pathfind(grid, (player_grid_x, player_grid_y), stairs_pos)
+                    path = astar_pathfind(grid, (player_grid_x, player_grid_y), stairs_pos, location_name)
                     if path and len(path) > 0:
                         # Add one more UP to go through the stairs
                         path.append('UP')
@@ -162,7 +162,7 @@ def _get_phase_4_suggested_action(state_data, current_location: str = None, obje
                 
                 # Use A* to pathfind to door
                 if door_pos:
-                    path = astar_pathfind(grid, (player_grid_x, player_grid_y), door_pos)
+                    path = astar_pathfind(grid, (player_grid_x, player_grid_y), door_pos, location_name)
                     if path and len(path) > 0:
                         # Add one more DOWN to exit through the door
                         path.append('DOWN')
@@ -227,7 +227,7 @@ def _get_phase_4_suggested_action(state_data, current_location: str = None, obje
                     
                     # Use A* to pathfind to door
                     if door_pos:
-                        path = astar_pathfind(grid, (player_grid_x, player_grid_y), door_pos)
+                        path = astar_pathfind(grid, (player_grid_x, player_grid_y), door_pos, location_name)
                         if path and len(path) > 0:
                             # Add one more UP to enter Birch's lab
                             path.append('UP')
