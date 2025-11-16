@@ -4,7 +4,7 @@ Phase 5 prompt - Route 102 & Petalburg
 
 from typing import List, Any
 from .common import build_base_prompt
-from utils.state_formatter import find_path_around_obstacle
+# from utils.state_formatter import find_path_around_obstacle  # Not in original repo
 
 
 def _is_objective_completed(objectives: List[Any], objective_id: str) -> bool:

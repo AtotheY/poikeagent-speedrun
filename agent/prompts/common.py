@@ -3,7 +3,7 @@ Common prompt components shared across all phases
 """
 
 import logging
-from utils.state_formatter import find_path_around_obstacle
+# from utils.state_formatter import find_path_around_obstacle  # Not in original repo
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,10 @@ def get_pathfinding_helper(state_data) -> str:
     if not state_data:
         return ""
     
+    # Disabled - find_path_around_obstacle not in original repo
+    # Phase 6 has its own pathfinding system
+    return ""
+    
     # Check if we're in overworld
     game_data = state_data.get('game', {})
     is_in_battle = game_data.get('is_in_battle', False) or game_data.get('in_battle', False)
@@ -103,7 +107,8 @@ def get_pathfinding_helper(state_data) -> str:
     
     for direction in ['UP', 'DOWN', 'LEFT', 'RIGHT']:
         display_name = direction_names[direction]
-        path_info = find_path_around_obstacle(state_data, direction)
+        # path_info = find_path_around_obstacle(state_data, direction)  # Not in original repo
+        path_info = None
         
         if not path_info:
             continue

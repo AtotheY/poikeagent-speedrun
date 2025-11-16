@@ -4,7 +4,7 @@ Phase 4 prompt - Rival Battle & Pokedex
 
 from typing import List, Any
 from .common import build_base_prompt
-from utils.state_formatter import find_path_around_obstacle
+# from utils.state_formatter import find_path_around_obstacle  # Not in original repo
 
 
 def _is_objective_completed(objectives: List[Any], objective_id: str) -> bool:
@@ -235,11 +235,11 @@ def _get_phase_4_suggested_action(state_data, current_location: str = None, obje
                     return "\nSuggested action: LEFT"
                 else:
                     # Continue south
-                    path_info = find_path_around_obstacle(state_data, 'DOWN')
-                    if path_info and path_info.get('is_blocked') and path_info.get('detour_needed'):
-                        action_seq = path_info.get('action_sequence', [])
-                        if action_seq:
-                            return f"\nSuggested action: {', '.join(action_seq)}"
+                    # path_info = find_path_around_obstacle(state_data, 'DOWN')  # Not in original repo
+                    # if path_info and path_info.get('is_blocked') and path_info.get('detour_needed'):
+                    #     action_seq = path_info.get('action_sequence', [])
+                    #     if action_seq:
+                    #         return f"\nSuggested action: {', '.join(action_seq)}"
                     return "\nSuggested action: DOWN"
         
         # ROUTE 101/103 - go north to rival
@@ -267,11 +267,11 @@ def _get_phase_4_suggested_action(state_data, current_location: str = None, obje
                     return "\nSuggested action: RIGHT"
             
             # Continue north
-            path_info = find_path_around_obstacle(state_data, 'UP')
-            if path_info and path_info.get('is_blocked') and path_info.get('detour_needed'):
-                action_seq = path_info.get('action_sequence', [])
-                if action_seq:
-                    return f"\nSuggested action: {', '.join(action_seq)}"
+            # path_info = find_path_around_obstacle(state_data, 'UP')  # Not in original repo
+            # if path_info and path_info.get('is_blocked') and path_info.get('detour_needed'):
+            #     action_seq = path_info.get('action_sequence', [])
+            #     if action_seq:
+            #         return f"\nSuggested action: {', '.join(action_seq)}"
             return "\nSuggested action: UP"
     
     return "\nSuggested action: UP"

@@ -2679,16 +2679,20 @@ class PokemonEmeraldReader:
                         logger.debug(f"Error getting location connections: {e}")
                 
                 # Generate the map display lines using stored map data, focused on 15x15 agent view
-                # NPCs disabled - unreliable detection with incorrect positions
-                map_lines = self._map_stitcher.generate_location_map_display(
-                    location_name=location,
-                    player_pos=player_pos,
-                    npcs=None,  # Disabled - unreliable NPC positions
-                    connections=connections_with_coords
-                )
+                # Try to read NPCs from game memory
+                try:
+                    npcs = self.read_object_events()
+                    logger.debug(f"Read {len(npcs) if npcs else 0} NPCs from game memory")
+                except Exception as e:
+                    logger.debug(f"Failed to read NPCs: {e}")
+                    npcs = None
                 
-                # Store as formatted text for direct use
-                state["map"]["visual_map"] = "\n".join(map_lines) if map_lines else None
+                # Store NPCs in state for pathfinding to use
+                state["map"]["npcs"] = npcs if npcs else []
+                
+                # Don't store visual_map here - let state_formatter generate the local 15x15 view
+                # using format_map_for_llm which is the proper local view
+                # The full stitched map from generate_location_map_display is too large
         
         # Pass the MapStitcher instance for state_formatter to use
         # This ensures the same instance with all the data is used

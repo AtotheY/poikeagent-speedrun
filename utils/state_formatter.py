@@ -10,7 +10,7 @@ import json
 import logging
 import numpy as np
 from PIL import Image
-from utils.map_formatter import format_map_grid, format_map_for_llm, generate_dynamic_legend, format_tile_to_symbol, format_map_coordinate_list
+from utils.map_formatter import format_map_grid, format_map_for_llm, generate_dynamic_legend, format_tile_to_symbol
 import base64
 import io
 import os, sys
@@ -869,20 +869,42 @@ def _format_map_info(map_info, player_data=None, include_debug_info=False, inclu
                 context_parts.append(f"Player Position: ({player_coords[0]}, {player_coords[1]})")
             context_parts.append("Note: See screenshot for visual map. Detailed tile data not available.")
     else:
-        # When NOT using JSON format, ALWAYS use new coordinate system from memory tiles
-        # This ensures consistent 0,0 top-left coordinate system everywhere
-        if 'tiles' in map_info and map_info['tiles']:
-            if location_name:
-                context_parts.append(f"\n--- MAP: {location_name.upper()} ---")
-            else:
-                context_parts.append("\n--- LOCAL MAP (Location unknown) ---")
-            _add_local_map_fallback(context_parts, map_info, include_npcs, location_name, player_coords)
+        # When NOT using JSON format, show ASCII visual maps
+        # Prefer local 15x15 view from memory tiles (clean, focused view for pathfinding)
+        if 'tiles' in map_info and map_info['tiles'] and location_name:
+            # Use local 15x15 view - this is the clean, focused view the agent needs
+            context_parts.append(f"\n--- MAP: {location_name.upper()} ---")
+            _add_local_map_fallback(context_parts, map_info, include_npcs, location_name)
         elif map_info.get('visual_map'):
-            # Fallback to pre-generated map if no tiles available
+            # Fallback to pre-generated map visualization if local tiles not available
             context_parts.append(map_info['visual_map'])
         elif location_name:
-            context_parts.append(f"\n--- MAP: {location_name.upper()} ---")
-            context_parts.append("No map data available")
+            # Last resort: use MapStitcher (shows full explored area, not ideal)
+            if map_stitcher:
+                map_lines = map_stitcher.generate_location_map_display(
+                    location_name=location_name,
+                    player_pos=player_coords,
+                    npcs=npcs,
+                    connections=connections
+                )
+
+                if map_lines:
+                    context_parts.extend(map_lines)
+                    # Add exploration statistics
+                    location_grid = map_stitcher.get_location_grid(location_name)
+                    if location_grid:
+                        total_tiles = len(location_grid)
+                        context_parts.append("")
+                        context_parts.append(f"Total explored: {total_tiles} tiles")
+                else:
+                    context_parts.append(f"\n--- MAP: {location_name.upper()} ---")
+                    context_parts.append("No map data available")
+
+    if not location_name:
+        # No location name - use local map fallback
+        context_parts.append("\n--- LOCAL MAP (Location unknown) ---")
+        if 'tiles' in map_info and map_info['tiles']:
+            _add_local_map_fallback(context_parts, map_info, include_npcs, None)
     
     # NPC information removed - unreliable detection with incorrect positions
     
@@ -893,23 +915,29 @@ def _format_map_info(map_info, player_data=None, include_debug_info=False, inclu
     
     return context_parts
 
-def _add_local_map_fallback(context_parts, map_info, include_npcs, location_name=None, player_coords=None):
+def _add_local_map_fallback(context_parts, map_info, include_npcs, location_name=None):
     """Helper function to add local map display as fallback"""
     if 'tiles' in map_info and map_info['tiles']:
         raw_tiles = map_info['tiles']
+        # Use default facing direction since memory-based facing is unreliable
+        facing = "South"  # default
         
-        # Get player coordinates (use provided or fallback to map_info)
-        if player_coords is None:
-            player_coords = map_info.get('player_coords')
+        # Get player coordinates
+        player_coords = map_info.get('player_coords')
         
         # Get NPCs if available and include_npcs is True
         npcs = []
         if include_npcs and 'object_events' in map_info:
             npcs = map_info.get('object_events', [])
         
-        # Use new coordinate list format for better LLM readability
-        map_display = format_map_coordinate_list(raw_tiles, player_coords, location_name, npcs)
+        # Use unified LLM formatter for consistency with NPCs if available
+        map_display = format_map_for_llm(raw_tiles, facing, npcs, player_coords, location_name)
         context_parts.append(map_display)
+        
+        # Add dynamic legend based on symbols in the map
+        grid = format_map_grid(raw_tiles, facing, npcs, player_coords, location_name=location_name)
+        legend = generate_dynamic_legend(grid)
+        context_parts.append(f"\n{legend}")
 
 def _format_world_map_display(stitched_data, full_state_data=None):
     """Format location-specific map display"""
@@ -1302,7 +1330,11 @@ def _format_game_state(game_data, state_data=None):
     
     # Add helpful prompt for title sequence
     player_location = player_data.get('location', '')
-
+    if player_location == 'TITLE_SEQUENCE':
+        context_parts.append("")
+        context_parts.append("💡 TIP: Make sure to choose a fun name for your character!")
+        context_parts.append("Be creative and have fun with the naming!")
+    
     # Add movement preview for overworld navigation (but not during title sequence)
     if (state_data and not is_in_battle and 
         game_data.get('game_state') == 'overworld' and 
@@ -1391,8 +1423,6 @@ def get_movement_preview(state_data):
     Returns:
         dict: Direction -> preview info mapping
     """
-    from utils.map_formatter import format_map_grid, format_tile_to_symbol
-    
     # Get current player position
     player_data = state_data.get('player', {})
     player_position = _get_player_position(player_data)
@@ -1403,7 +1433,6 @@ def get_movement_preview(state_data):
     
     current_x = int(player_position['x'])
     current_y = int(player_position['y'])
-    player_coords = (current_x, current_y)
     
     # Get map and tile data
     map_info = state_data.get('map', {})
@@ -1413,115 +1442,61 @@ def get_movement_preview(state_data):
         # print( Movement preview - No tiles. map_info keys: {list(map_info.keys()) if map_info else 'None'}")
         return {}
     
-    # Get NPCs for the grid
-    npcs = state_data.get('map', {}).get('npcs', [])
-    location_name = state_data.get('player', {}).get('location', '')
-    
-    # IMPORTANT: Generate the same trimmed grid that the visual map uses
-    # This ensures coordinates match exactly between the visual map and movement preview
-    grid = format_map_grid(raw_tiles, "South", npcs, player_coords, location_name=location_name)
-    
-    if not grid:
-        return {}
-    
-    grid_height = len(grid)
-    grid_width = len(grid[0]) if grid else 0
-    
-    # Find player position in the trimmed grid
-    player_grid_x = None
-    player_grid_y = None
-    
-    for y_idx, row in enumerate(grid):
-        for x_idx, symbol in enumerate(row):
-            if symbol == 'P':
-                player_grid_x = x_idx
-                player_grid_y = grid_height - 1 - y_idx  # Flipped Y-axis
-                break
-        if player_grid_x is not None:
-            break
-    
-    if player_grid_x is None or player_grid_y is None:
-        return {}
-    
-    # Grid movement directions (how to move in the grid array)
-    directions_grid = {
-        'UP': (0, -1),      # Up in grid = decrease row index
-        'DOWN': (0, 1),     # Down in grid = increase row index  
-        'LEFT': (-1, 0),    # Left = decrease column
-        'RIGHT': (1, 0)     # Right = increase column
-    }
-    
-    # Display coordinate changes (flipped Y-axis for intuitive movement)
-    directions_display = {
-        'UP': (0, 1),       # UP increases display Y
-        'DOWN': (0, -1),    # DOWN decreases display Y
-        'LEFT': (-1, 0),    # LEFT decreases X
-        'RIGHT': (1, 0)     # RIGHT increases X
+    directions = {
+        'UP': (0, -1),
+        'DOWN': (0, 1), 
+        'LEFT': (-1, 0),
+        'RIGHT': (1, 0)
     }
     
     movement_preview = {}
     
+    # Player is at center of the 15x15 grid
+    center_x = len(raw_tiles[0]) // 2 if raw_tiles and raw_tiles[0] else 7
+    center_y = len(raw_tiles) // 2 if raw_tiles else 7
+    
     # Get the tile the player is currently standing on
-    player_y_idx = grid_height - 1 - player_grid_y  # Convert display Y back to grid index
-    current_tile_symbol = grid[player_y_idx][player_grid_x] if player_y_idx < len(grid) else None
+    current_tile_symbol = None
+    if (0 <= center_y < len(raw_tiles) and 
+        0 <= center_x < len(raw_tiles[center_y]) and
+        raw_tiles[center_y] and raw_tiles[center_y][center_x]):
+        current_tile = raw_tiles[center_y][center_x]
+        current_tile_symbol = format_tile_to_symbol(current_tile)
     
-    # IMPORTANT: Check the ACTUAL tile under the player from raw_tiles, not the grid display
-    # The grid shows 'P' where the player is, but we need to know the real tile (D, S, etc.)
-    actual_tile_under_player = None
-    if raw_tiles:
-        center_y = len(raw_tiles) // 2
-        center_x = len(raw_tiles[0]) // 2 if len(raw_tiles) > 0 and len(raw_tiles[0]) > 0 else 0
-        if center_y < len(raw_tiles) and center_x < len(raw_tiles[center_y]):
-            player_tile = raw_tiles[center_y][center_x]
-            if player_tile:
-                from utils.map_formatter import format_tile_to_symbol
-                actual_tile_under_player = format_tile_to_symbol(player_tile)
-    
-    for direction in ['UP', 'DOWN', 'LEFT', 'RIGHT']:
-        dx_grid, dy_grid = directions_grid[direction]
-        dx_display, dy_display = directions_display[direction]
+    for direction, (dx, dy) in directions.items():
+        # Calculate new world coordinates
+        new_world_x = current_x + dx
+        new_world_y = current_y + dy
         
-        # Calculate new display coordinates (what agent sees)
-        new_display_x = player_grid_x + dx_display
-        new_display_y = player_grid_y + dy_display
-        
-        # Calculate grid position in the trimmed grid array (internal)
-        new_y_idx = player_y_idx + dy_grid  # Grid array index
-        new_x_idx = player_grid_x + dx_grid
+        # Calculate grid position in the tile array
+        grid_x = center_x + dx
+        grid_y = center_y + dy
         
         preview_info = {
-            'new_coords': (new_display_x, new_display_y),
+            'new_coords': (new_world_x, new_world_y),
             'blocked': True,
             'tile_symbol': '#',
             'tile_description': 'BLOCKED - Out of bounds'
         }
         
-        # Check if the target position is within the trimmed grid bounds
-        if (0 <= new_y_idx < len(grid) and 
-            0 <= new_x_idx < len(grid[new_y_idx])):
+        # Check if the target position is within the grid bounds
+        if (0 <= grid_y < len(raw_tiles) and 
+            0 <= grid_x < len(raw_tiles[grid_y]) and
+            raw_tiles[grid_y]):
             
             try:
-                # Get the symbol at the target position in the trimmed grid
-                tile_symbol = grid[new_y_idx][new_x_idx]
+                # Get the tile at the target position
+                target_tile = raw_tiles[grid_y][grid_x]
+                
+                # Get tile symbol and check if walkable
+                tile_symbol = format_tile_to_symbol(target_tile)
                 
                 # Determine if movement is blocked
-                # Walls (#) and Water (W) block movement - doors (D) and stairs (S) are walkable
-                # SPECIAL: In specific locations (Littleroot, Route 101, Oldale), treat doors as blocked
-                location_upper = location_name.upper() if location_name else ""
-                treat_doors_as_blocked = ("LITTLEROOT" in location_upper or 
-                                         "ROUTE_101" in location_upper or 
-                                         "ROUTE 101" in location_upper or 
-                                         "OLDALE" in location_upper)
-                
-                if treat_doors_as_blocked:
-                    is_blocked = tile_symbol in ['#', 'W', 'D']
-                else:
-                    is_blocked = tile_symbol in ['#', 'W']
+                is_blocked = tile_symbol in ['#', 'W']  # Walls and water block movement
                 
                 # SPECIAL CASE: If player is standing on stairs/door, don't block the warp direction
                 # Stairs and doors often require moving in a specific direction to activate
-                # Use actual_tile_under_player since grid shows 'P' not 'D'/'S'
-                if actual_tile_under_player in ['S', 'D']:
+                if current_tile_symbol in ['S', 'D']:
                     # When on stairs/doors, typically you need to move forward to activate them
                     # Don't block any direction when on these tiles to allow proper navigation
                     # This ensures the agent can properly use warps/doors even if the destination
@@ -1549,31 +1524,54 @@ def get_movement_preview(state_data):
                     else:
                         is_blocked = True  # Block diagonal movements for basic directional ledges
                 
-                # Get tile description from symbol legend
-                from utils.map_formatter import get_symbol_legend
-                symbol_legend = get_symbol_legend()
-                base_description = symbol_legend.get(tile_symbol, "Unknown")
-                
-                # Create human-readable description
-                # Check if we're overriding blocking due to being on stairs/door
-                is_override = actual_tile_under_player in ['S', 'D'] and not is_blocked and tile_symbol in ['#', 'W']
-                
-                if is_override:
-                    # We're on stairs/door and this normally blocked tile is walkable
-                    if tile_symbol == '#':
-                        tile_description = "Warp/Door exit (normally blocked)"
+                # Get tile description
+                if len(target_tile) >= 2:
+                    tile_id, behavior = target_tile[:2]
+                    
+                    # Convert behavior to readable description
+                    if hasattr(behavior, 'name'):
+                        behavior_name = behavior.name
+                    elif isinstance(behavior, int):
+                        try:
+                            behavior_enum = MetatileBehavior(behavior)
+                            behavior_name = behavior_enum.name
+                        except (ValueError, ImportError):
+                            behavior_name = f"BEHAVIOR_{behavior}"
+                    else:
+                        behavior_name = str(behavior)
+                    
+                    # Create human-readable description
+                    # Check if we're overriding blocking due to being on stairs/door
+                    is_override = current_tile_symbol in ['S', 'D'] and not is_blocked and tile_symbol in ['#', 'W']
+                    
+                    if is_override:
+                        # We're on stairs/door and this normally blocked tile is walkable
+                        if tile_symbol == '#':
+                            tile_description = f"Walkable - Warp/Door exit (normally blocked) (ID: {tile_id})"
+                        elif tile_symbol == 'W':
+                            tile_description = f"Walkable - Warp/Door exit over water (ID: {tile_id})"
+                    elif tile_symbol == '.':
+                        tile_description = f"Walkable path (ID: {tile_id})"
+                    elif tile_symbol == '#':
+                        tile_description = f"BLOCKED - Wall/Obstacle (ID: {tile_id}, {behavior_name})"
                     elif tile_symbol == 'W':
-                        tile_description = "Warp/Door exit over water"
+                        tile_description = f"BLOCKED - Water (need Surf) (ID: {tile_id})"
+                    elif tile_symbol == '~':
+                        tile_description = f"Walkable - Tall grass (wild encounters) (ID: {tile_id})"
+                    elif tile_symbol == 'D':
+                        tile_description = f"Walkable - Door/Entrance (ID: {tile_id})"
+                    elif tile_symbol == 'S':
+                        tile_description = f"Walkable - Stairs/Warp (ID: {tile_id})"
+                    elif tile_symbol in ['↓', '↑', '←', '→', '↗', '↖', '↘', '↙']:
+                        # Ledge description based on whether movement is allowed
+                        if is_blocked:
+                            tile_description = f"BLOCKED - Jump ledge {tile_symbol} (wrong direction) (ID: {tile_id})"
+                        else:
+                            tile_description = f"Walkable - Jump ledge {tile_symbol} (correct direction) (ID: {tile_id})"
                     else:
-                        tile_description = base_description
-                elif tile_symbol in ['↓', '↑', '←', '→', '↗', '↖', '↘', '↙']:
-                    # Ledge description based on whether movement is allowed
-                    if is_blocked:
-                        tile_description = f"{base_description} (wrong direction)"
-                    else:
-                        tile_description = f"{base_description} (correct direction)"
+                        tile_description = f"Walkable - {behavior_name} (ID: {tile_id})"
                 else:
-                    tile_description = base_description
+                    tile_description = "Unknown tile"
                 
                 preview_info.update({
                     'blocked': is_blocked,
@@ -1582,7 +1580,7 @@ def get_movement_preview(state_data):
                 })
                 
             except (IndexError, TypeError) as e:
-                logger.warning(f"Error analyzing tile at ({new_x_idx}, {new_y_idx}): {e}")
+                logger.warning(f"Error analyzing tile at {grid_x}, {grid_y}: {e}")
                 # Keep default blocked values
                 pass
         
@@ -1613,7 +1611,7 @@ def format_movement_preview_for_llm(state_data):
             info = preview[direction]
             new_x, new_y = info['new_coords']
             symbol = info['tile_symbol']
-            status = "BLOCKED - DO NOT GO THIS DIRECTION!" if info['blocked'] else "WALKABLE"
+            status = "BLOCKED" if info['blocked'] else "WALKABLE"
             
             lines.append(f"  {direction:5}: ({new_x:3},{new_y:3}) [{symbol}] {status}")
             # Add brief description for tiles
@@ -1638,339 +1636,6 @@ def format_movement_preview_for_llm(state_data):
                     lines[-1] += " - Jump ledge (can jump this way)"
     
     return "\n".join(lines)
-
-
-def astar_pathfind(grid, start_pos, goal_pos, location_name=''):
-    """
-    A* pathfinding to find path through walkable tiles.
-    
-    Args:
-        grid: 2D grid with symbols
-        start_pos: (x, y) in grid coordinates
-        goal_pos: (x, y) in grid coordinates
-        location_name: Current location name (for door-blocking logic)
-        
-    Returns:
-        List of directions ['UP', 'RIGHT', 'DOWN', ...] or None if no path
-    """
-    from heapq import heappush, heappop
-    
-    start_x, start_y = start_pos
-    goal_x, goal_y = goal_pos
-    
-    # Determine if doors should be treated as blocked based on location
-    location_upper = location_name.upper() if location_name else ""
-    treat_doors_as_blocked = ("LITTLEROOT" in location_upper or 
-                             "ROUTE_101" in location_upper or 
-                             "ROUTE 101" in location_upper or 
-                             "OLDALE" in location_upper)
-    
-    # Determine walkable tiles based on location
-    if treat_doors_as_blocked:
-        walkable_tiles = ['.', '~', 'P', 'S']  # Exclude 'D' (doors)
-    else:
-        walkable_tiles = ['.', '~', 'P', 'D', 'S']  # Include 'D' (doors)
-    
-    # Check if goal is walkable
-    if goal_y >= len(grid) or goal_x >= len(grid[goal_y]):
-        return None
-    goal_tile = grid[goal_y][goal_x]
-    if goal_tile not in walkable_tiles:
-        return None
-    
-    # A* data structures
-    open_set = []
-    heappush(open_set, (0, start_pos))
-    came_from = {}
-    g_score = {start_pos: 0}
-    
-    def heuristic(pos):
-        # Manhattan distance
-        return abs(pos[0] - goal_x) + abs(pos[1] - goal_y)
-    
-    f_score = {start_pos: heuristic(start_pos)}
-    
-    # Direction mappings (grid coordinates)
-    directions = {
-        'UP': (0, -1),
-        'DOWN': (0, 1),
-        'LEFT': (-1, 0),
-        'RIGHT': (1, 0)
-    }
-    
-    while open_set:
-        _, current = heappop(open_set)
-        
-        if current == goal_pos:
-            # Reconstruct path
-            path = []
-            while current in came_from:
-                prev = came_from[current]
-                dx = current[0] - prev[0]
-                dy = current[1] - prev[1]
-                
-                # Find direction
-                for dir_name, (ddx, ddy) in directions.items():
-                    if dx == ddx and dy == ddy:
-                        path.append(dir_name)
-                        break
-                current = prev
-            
-            path.reverse()
-            return path
-        
-        curr_x, curr_y = current
-        
-        for dir_name, (dx, dy) in directions.items():
-            neighbor = (curr_x + dx, curr_y + dy)
-            nx, ny = neighbor
-            
-            # Check bounds
-            if ny < 0 or ny >= len(grid) or nx < 0 or nx >= len(grid[ny]):
-                continue
-            
-            # Check walkability using location-specific walkable tiles
-            tile = grid[ny][nx]
-            if tile not in walkable_tiles:
-                continue
-            
-            tentative_g = g_score[current] + 1
-            
-            if neighbor not in g_score or tentative_g < g_score[neighbor]:
-                came_from[neighbor] = current
-                g_score[neighbor] = tentative_g
-                f = tentative_g + heuristic(neighbor)
-                f_score[neighbor] = f
-                heappush(open_set, (f, neighbor))
-    
-    return None  # No path found
-
-
-def find_directional_goal(grid, player_pos, direction, location_name=''):
-    """
-    Find the best walkable goal in a given direction.
-    
-    Args:
-        grid: 2D grid
-        player_pos: (x, y) player position in grid
-        direction: 'UP', 'DOWN', 'LEFT', 'RIGHT'
-        location_name: Current location name (for door-blocking logic)
-        
-    Returns:
-        (goal_x, goal_y) or None
-    """
-    px, py = player_pos
-    
-    # Determine if doors should be treated as blocked based on location
-    location_upper = location_name.upper() if location_name else ""
-    treat_doors_as_blocked = ("LITTLEROOT" in location_upper or 
-                             "ROUTE_101" in location_upper or 
-                             "ROUTE 101" in location_upper or 
-                             "OLDALE" in location_upper)
-    
-    # Determine walkable tiles based on location
-    if treat_doors_as_blocked:
-        walkable_tiles = ['.', '~', 'S']  # Exclude 'D' (doors)
-    else:
-        walkable_tiles = ['.', '~', 'D', 'S']  # Include 'D' (doors)
-    
-    grid_width = len(grid[0]) if grid else 0
-    grid_height = len(grid)
-    center_x = grid_width // 2
-    center_y = grid_height // 2
-    
-    if direction == 'UP':
-        # Find most northern walkable point, closest to center X
-        for y in range(len(grid)):
-            candidates = []
-            for x in range(len(grid[y])):
-                if grid[y][x] in walkable_tiles:
-                    candidates.append((x, y))
-            if candidates:
-                # Pick the one closest to center X
-                best = min(candidates, key=lambda pos: abs(pos[0] - center_x))
-                return best
-    elif direction == 'DOWN':
-        # Find most southern walkable point, closest to center X
-        for y in range(len(grid) - 1, -1, -1):
-            candidates = []
-            for x in range(len(grid[y])):
-                if grid[y][x] in walkable_tiles:
-                    candidates.append((x, y))
-            if candidates:
-                # Pick the one closest to center X
-                best = min(candidates, key=lambda pos: abs(pos[0] - center_x))
-                return best
-    elif direction == 'LEFT':
-        # Find most western walkable point, closest to center Y
-        for x in range(len(grid[0])):
-            candidates = []
-            for y in range(len(grid)):
-                if x < len(grid[y]) and grid[y][x] in walkable_tiles:
-                    candidates.append((x, y))
-            if candidates:
-                # Pick the one closest to center Y
-                best = min(candidates, key=lambda pos: abs(pos[1] - center_y))
-                return best
-    elif direction == 'RIGHT':
-        # Find most eastern walkable point, closest to center Y
-        for x in range(len(grid[0]) - 1, -1, -1):
-            candidates = []
-            for y in range(len(grid)):
-                if x < len(grid[y]) and grid[y][x] in walkable_tiles:
-                    candidates.append((x, y))
-            if candidates:
-                # Pick the one closest to center Y
-                best = min(candidates, key=lambda pos: abs(pos[1] - center_y))
-                return best
-    
-    return None
-
-
-def find_path_around_obstacle(state_data, target_direction):
-    """
-    Find a complete path to navigate in a given direction using A* pathfinding.
-    
-    When trying to go in a direction and it's blocked, finds the most extreme
-    walkable point in that direction and calculates the full path there.
-    
-    Args:
-        state_data: Complete game state data
-        target_direction: The direction you want to go ('UP', 'DOWN', 'LEFT', 'RIGHT')
-        
-    Returns:
-        dict: Path guidance with full action sequence
-    """
-    # Get movement preview which has accurate blocking info
-    movement_preview = get_movement_preview(state_data)
-    
-    if not movement_preview or target_direction not in movement_preview:
-        return None
-    
-    # Check if target direction is blocked using Movement Preview's logic
-    target_info = movement_preview.get(target_direction, {})
-    is_blocked = target_info.get('blocked', False)
-    
-    if not is_blocked:
-        # Target direction is clear, can proceed directly
-        return {
-            'is_blocked': False,
-            'instructions': f"{target_direction} is clear - proceed directly.",
-            'detour_needed': False,
-            'action_sequence': [target_direction]
-        }
-    
-    # Target is blocked - need to find a detour
-    player_data = state_data.get('player', {})
-    player_position = player_data.get('position', {})
-    
-    if not player_position or 'x' not in player_position or 'y' not in player_position:
-        return None
-    
-    current_x = int(player_position['x'])
-    current_y = int(player_position['y'])
-    player_coords = (current_x, current_y)
-    
-    # Get map and tile data for detour pathfinding
-    map_info = state_data.get('map', {})
-    raw_tiles = map_info.get('tiles', [])
-    
-    if not raw_tiles:
-        return None
-    
-    # Get NPCs for the grid
-    npcs = state_data.get('map', {}).get('npcs', [])
-    location_name = state_data.get('player', {}).get('location', '')
-    
-    # Generate the grid
-    from utils.map_formatter import format_map_grid
-    grid = format_map_grid(raw_tiles, "South", npcs, player_coords, location_name=location_name)
-    
-    if not grid:
-        return None
-    
-    grid_height = len(grid)
-    grid_width = len(grid[0]) if grid else 0
-    
-    # Find player position in the trimmed grid
-    player_grid_x = None
-    player_grid_y = None
-    
-    for y_idx, row in enumerate(grid):
-        for x_idx, symbol in enumerate(row):
-            if symbol == 'P':
-                player_grid_x = x_idx
-                player_grid_y = grid_height - 1 - y_idx  # Flipped Y-axis
-                break
-        if player_grid_x is not None:
-            break
-    
-    if player_grid_x is None or player_grid_y is None:
-        return None
-    
-    # Convert player position to grid array index
-    player_y_idx = grid_height - 1 - player_grid_y
-    
-    # Find the most extreme walkable point in the target direction
-    goal_pos = find_directional_goal(grid, (player_grid_x, player_y_idx), target_direction, location_name)
-    
-    if not goal_pos:
-        return {
-            'is_blocked': True,
-            'detour_needed': False,
-            'instructions': f"{target_direction} is blocked and no walkable destination found.",
-            'action_sequence': []
-        }
-    
-    # Use A* to find the full path (pass location for door-blocking logic)
-    path = astar_pathfind(grid, (player_grid_x, player_y_idx), goal_pos, location_name)
-    
-    if not path or len(path) == 0:
-        return {
-            'is_blocked': True,
-            'detour_needed': False,
-            'instructions': f"{target_direction} is blocked and no clear path found.",
-            'action_sequence': []
-        }
-    
-    # Format the path as instructions
-    actions_str = ' '.join(path)
-    
-    instructions = (
-        f"To go {target_direction}: Follow this path: {actions_str}"
-    )
-    
-    return {
-        'is_blocked': True,
-        'detour_needed': True,
-        'instructions': instructions,
-        'action_sequence': path,
-        'path_length': len(path)
-    }
-
-
-def get_navigation_hints(state_data):
-    """
-    Get navigation hints for all four directions, suggesting paths around obstacles.
-    
-    Args:
-        state_data: Complete game state data
-        
-    Returns:
-        str: Formatted navigation hints for the LLM
-    """
-    hints = []
-    hints.append("🧭 NAVIGATION HINTS:")
-    
-    for direction in ['UP', 'DOWN', 'LEFT', 'RIGHT']:
-        path_info = find_path_around_obstacle(state_data, direction)
-        if path_info and path_info.get('detour_needed'):
-            hints.append(f"\n{direction}: {path_info['instructions']}")
-    
-    if len(hints) == 1:  # Only the header was added
-        return None  # No hints needed, all directions are clear or no path found
-    
-    return "\n".join(hints)
 
 
 def get_party_health_summary(state_data):
@@ -2016,4 +1681,109 @@ def get_party_health_summary(state_data):
         "healthy_count": healthy_count,
         "total_count": len(pokemon_list),
         "critical_pokemon": critical_pokemon
-    } 
+    }
+
+
+def astar_pathfind(grid, start, goal, location_name=''):
+    """
+    A* pathfinding on a 2D grid.
+    
+    Args:
+        grid: 2D list where grid[y][x] is the tile symbol
+        start: (x, y) tuple of start position in grid coordinates
+        goal: (x, y) tuple of goal position in grid coordinates
+        location_name: Name of the location (for debugging)
+    
+    Returns:
+        List of action strings like ['UP', 'RIGHT', 'UP'] or empty list if no path
+    """
+    import heapq
+    
+    if not grid or not start or not goal:
+        return []
+    
+    height = len(grid)
+    if height == 0:
+        return []
+    width = len(grid[0])
+    
+    start_x, start_y = start
+    goal_x, goal_y = goal
+    
+    # Validate positions
+    if not (0 <= start_x < width and 0 <= start_y < height):
+        return []
+    if not (0 <= goal_x < width and 0 <= goal_y < height):
+        return []
+    
+    # Check if start/goal are walkable
+    def is_walkable(x, y):
+        if not (0 <= x < width and 0 <= y < height):
+            return False
+        tile = grid[y][x]
+        # Walkable tiles: '.', 'P', 'S', 'D', '@' (bridge), 'N', etc. NOT walkable: '#', 'W'
+        # Note: '@' is used for both bridges and trainer NPCs, both are walkable
+        return tile not in ['#', 'W', ' ', None]
+    
+    if not is_walkable(goal_x, goal_y):
+        return []
+    
+    # A* search
+    def heuristic(x, y):
+        return abs(x - goal_x) + abs(y - goal_y)
+    
+    # Priority queue: (f_score, counter, (x, y))
+    counter = 0
+    open_set = [(heuristic(start_x, start_y), counter, start)]
+    counter += 1
+    
+    came_from = {}
+    g_score = {start: 0}
+    
+    while open_set:
+        _, _, current = heapq.heappop(open_set)
+        
+        if current == goal:
+            # Reconstruct path
+            path = []
+            while current in came_from:
+                prev = came_from[current]
+                dx = current[0] - prev[0]
+                dy = current[1] - prev[1]
+                
+                # Convert to action
+                if dx == 0 and dy == -1:
+                    path.append('UP')
+                elif dx == 0 and dy == 1:
+                    path.append('DOWN')
+                elif dx == -1 and dy == 0:
+                    path.append('LEFT')
+                elif dx == 1 and dy == 0:
+                    path.append('RIGHT')
+                
+                current = prev
+            
+            path.reverse()
+            return path
+        
+        curr_x, curr_y = current
+        
+        # Check all 4 directions
+        for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
+            neighbor_x = curr_x + dx
+            neighbor_y = curr_y + dy
+            neighbor = (neighbor_x, neighbor_y)
+            
+            if not is_walkable(neighbor_x, neighbor_y):
+                continue
+            
+            tentative_g = g_score[current] + 1
+            
+            if neighbor not in g_score or tentative_g < g_score[neighbor]:
+                came_from[neighbor] = current
+                g_score[neighbor] = tentative_g
+                f_score = tentative_g + heuristic(neighbor_x, neighbor_y)
+                heapq.heappush(open_set, (f_score, counter, neighbor))
+                counter += 1
+    
+    return [] 

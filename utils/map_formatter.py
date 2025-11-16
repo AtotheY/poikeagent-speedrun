@@ -241,6 +241,113 @@ def format_map_grid(raw_tiles, player_facing="South", npcs=None, player_coords=N
                 grid_row.append(symbol)
         grid.append(grid_row)
     
+    # Post-process: Detect bridges (# tiles in patterns like W #+ W)
+    # Bridges should be walkable despite showing as # initially
+    # Scan for complete bridge patterns: water, one or more #, water (same row/column)
+    if len(grid) > 0 and len(grid[0]) > 0:
+        height = len(grid)
+        width = len(grid[0])
+        
+        bridge_tiles = set()
+        
+        # Scan horizontally for W #+ W patterns
+        for y in range(height):
+            x = 0
+            while x < width:
+                # Look for water
+                if grid[y][x] == 'W':
+                    # Scan forward for # tiles followed by W
+                    bridge_start = None
+                    bridge_end = None
+                    
+                    for x2 in range(x + 1, width):
+                        if grid[y][x2] == '#':
+                            if bridge_start is None:
+                                bridge_start = x2
+                            bridge_end = x2
+                        elif grid[y][x2] == 'W':
+                            # Found W after #, this is a bridge!
+                            if bridge_start is not None:
+                                # Mark all # between the waters as bridge
+                                for bx in range(bridge_start, bridge_end + 1):
+                                    if grid[y][bx] == '#':
+                                        bridge_tiles.add((y, bx))
+                            break
+                        else:
+                            # Not a bridge pattern (hit something other than # or W)
+                            break
+                x += 1
+        
+        # Scan vertically for W #+ W patterns
+        for x in range(width):
+            y = 0
+            while y < height:
+                # Look for water
+                if grid[y][x] == 'W':
+                    # Scan downward for # tiles followed by W
+                    bridge_start = None
+                    bridge_end = None
+                    
+                    for y2 in range(y + 1, height):
+                        if grid[y2][x] == '#':
+                            if bridge_start is None:
+                                bridge_start = y2
+                            bridge_end = y2
+                        elif grid[y2][x] == 'W':
+                            # Found W after #, this is a bridge!
+                            if bridge_start is not None:
+                                # Mark all # between the waters as bridge
+                                for by in range(bridge_start, bridge_end + 1):
+                                    if grid[by][x] == '#':
+                                        bridge_tiles.add((by, x))
+                            break
+                        else:
+                            # Not a bridge pattern
+                            break
+                y += 1
+        
+        # Convert detected bridges to walkable paths
+        for y, x in bridge_tiles:
+            grid[y][x] = '.'
+        
+        # Pass 3: Iteratively extend bridges by connecting adjacent # tiles
+        # Keep expanding until no more # tiles can be connected
+        # This catches bridge extensions that continue beyond the visible water
+        max_iterations = 20
+        for iteration in range(max_iterations):
+            new_bridges = set()
+            
+            for y in range(height):
+                for x in range(width):
+                    if grid[y][x] == '#':
+                        # Check if this # is adjacent to a . (bridge tile) in same row/column
+                        left = grid[y][x-1] if x > 0 else None
+                        right = grid[y][x+1] if x < width-1 else None
+                        up = grid[y-1][x] if y > 0 else None
+                        down = grid[y+1][x] if y < height-1 else None
+                        
+                        # Check horizontal extension: . # pattern where . is in same row as water
+                        if left == '.' or right == '.':
+                            # Check if this row has water anywhere
+                            has_water_in_row = any(grid[y][x2] == 'W' for x2 in range(width))
+                            if has_water_in_row:
+                                new_bridges.add((y, x))
+                        
+                        # Check vertical extension: . # pattern where . is in same column as water
+                        elif up == '.' or down == '.':
+                            # Check if this column has water anywhere
+                            has_water_in_col = any(grid[y2][x] == 'W' for y2 in range(height))
+                            if has_water_in_col:
+                                new_bridges.add((y, x))
+            
+            # If no new bridges found, we're done
+            if not new_bridges:
+                break
+            
+            # Convert new bridges to walkable
+            for y, x in new_bridges:
+                grid[y][x] = '.'
+    
     # Trim padding if requested - but keep room boundaries!
     if trim_padding and len(grid) > 0:
         # First pass: Remove obvious padding (rows/columns that are ALL walls with no variation)
@@ -489,155 +596,3 @@ def format_map_for_llm_json(map_stitcher, location_name: str, player_coords=None
 
     # Format as readable text
     return map_stitcher.format_map_json_as_text(map_json)
-
-
-def format_map_coordinate_list(raw_tiles, player_coords=None, location_name=None, npcs=None):
-    """
-    Format map as a coordinate-leading list for LLM consumption.
-    
-    Instead of showing a grid, this lists each notable tile with its coordinates.
-    Format: SYMBOL (X,Y) = description
-    
-    Args:
-        raw_tiles: 2D list of tile tuples
-        player_coords: Tuple or dict with player position
-        location_name: Optional location name for context
-        npcs: List of NPC/object events
-        
-    Returns:
-        str: Formatted coordinate list
-    """
-    if not raw_tiles:
-        return "No map data available"
-    
-    # Get player coordinates
-    if isinstance(player_coords, dict):
-        player_x = player_coords.get('x', 0)
-        player_y = player_coords.get('y', 0)
-    elif player_coords:
-        player_x, player_y = player_coords
-    else:
-        player_x, player_y = 0, 0
-    
-    # First, generate the visual grid - this is the source of truth for coordinates
-    grid = format_map_grid(raw_tiles, "South", npcs, player_coords, location_name=location_name)
-    
-    if not grid:
-        return "No map data available"
-    
-    # Get grid dimensions first
-    grid_height = len(grid)
-    grid_width = len(grid[0]) if grid else 0
-    
-    # Get symbol legend for descriptions
-    symbol_legend = get_symbol_legend()
-    
-    # Build coordinate list from the same trimmed grid
-    player_tiles = []
-    interactive_tiles = []  # Doors, stairs, PC, TV, etc.
-    walkable_tiles = []
-    blocked_tiles = []
-    
-    # Track player position in the 0,0 coordinate system
-    player_grid_x = None
-    player_grid_y = None
-    
-    # Parse the grid to build coordinate list
-    # Flip Y-axis so UP increases Y (more intuitive for gameplay)
-    for y_idx, row in enumerate(grid):
-        for x_idx, symbol in enumerate(row):
-            coord_x = x_idx
-            coord_y = grid_height - 1 - y_idx  # Flip Y-axis: bottom row = 0, top row = max
-            
-            # Get description
-            description = symbol_legend.get(symbol, "Unknown")
-            
-            # Check for player
-            if symbol == 'P':
-                player_tiles.append(f"  P ({coord_x},{coord_y}) = Player (current position)")
-                player_grid_x = coord_x
-                player_grid_y = coord_y
-            # Interactive/important tiles
-            elif symbol in ['D', 'S', 'PC', 'T', 'K', 'C', 'B', 'N', '@', '?']:
-                interactive_tiles.append(f"  {symbol} ({coord_x},{coord_y}) = {description}")
-            # Walkable tiles
-            elif symbol == '.':
-                walkable_tiles.append(f"  . ({coord_x},{coord_y}) = {description}")
-            # Blocked tiles
-            elif symbol == '#':
-                blocked_tiles.append((coord_x, coord_y))
-    
-    # Build output - include both grid and coordinate list
-    lines = []
-    
-    lines.append("--- VISUAL MAP (ASCII Grid) ---")
-    lines.append("")
-    # Use 0,0 bottom-left coordinate system (Y increases upward)
-    if grid_width <= 20 and grid_height <= 20:  # Only for reasonably sized maps
-        # Add column coordinate header (0,1,2,3...)
-        header = "     "
-        for x_idx in range(grid_width):
-            header += f"{x_idx:>3}"
-        lines.append(header)
-        lines.append("")
-    
-    # Add grid rows with flipped Y coordinates (bottom = 0, top = max)
-    for y_idx, row in enumerate(grid):
-        # Flip Y coordinate display: top row shows highest Y value
-        display_y = grid_height - 1 - y_idx
-        row_str = f"{display_y:>3}  " + "  ".join(row)
-        lines.append(row_str)
-    
-    lines.append("")
-    # Add dynamic legend
-    legend = generate_dynamic_legend(grid)
-    lines.append(legend)
-    lines.append("")
-    
-    lines.append("--- MAP TILES (Coordinate Format) ---")
-    lines.append("")
-    
-    # Player position always first
-    if player_tiles:
-        lines.extend(player_tiles)
-        lines.append("")
-    
-    # Interactive/important tiles
-    if interactive_tiles:
-        lines.append("Notable Tiles:")
-        lines.extend(sorted(interactive_tiles))  # Sort for consistency
-        lines.append("")
-    
-    # Only show walkable tiles if the map is sparse (fewer than 50 walkable)
-    # if walkable_tiles and len(walkable_tiles) < 50:
-    #     lines.append("Walkable Tiles:")
-    #     # Show a sample, not all
-    #     for tile in walkable_tiles[:20]:
-    #         lines.append(tile)
-    #     if len(walkable_tiles) > 20:
-    #         lines.append(f"  ... and {len(walkable_tiles) - 20} more walkable tiles")
-    #     lines.append("")
-    
-    # Blocked tiles - just show count and bounds
-    if blocked_tiles:
-        min_x = min(x for x, y in blocked_tiles)
-        max_x = max(x for x, y in blocked_tiles)
-        min_y = min(y for x, y in blocked_tiles)
-        max_y = max(y for x, y in blocked_tiles)
-        lines.append(f"Blocked Tiles: {len(blocked_tiles)} walls/obstacles")
-        lines.append(f"  Area bounds: X=[{min_x},{max_x}], Y=[{min_y},{max_y}]")
-    
-    lines.append("")
-    lines.append("Coordinate System: (0,0) is bottom-left corner, Y increases upward")
-    lines.append("Movement: UP=(x,y+1), DOWN=(x,y-1), LEFT=(x-1,y), RIGHT=(x+1,y)")
-    
-    # Add directional preview if we know player position
-    if player_grid_x is not None and player_grid_y is not None:
-        lines.append("")
-        lines.append("From your position:")
-        lines.append(f"  UP    = ({player_grid_x},{player_grid_y+1})")
-        lines.append(f"  DOWN  = ({player_grid_x},{player_grid_y-1})")
-        lines.append(f"  LEFT  = ({player_grid_x-1},{player_grid_y})")
-        lines.append(f"  RIGHT = ({player_grid_x+1},{player_grid_y})")
-    
-    return "\n".join(lines)

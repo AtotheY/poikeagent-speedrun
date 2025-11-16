@@ -16,6 +16,143 @@ from .common import build_base_prompt
 
 
 # ============================================================================
+# PHASE 6 MEMORY - Track last map state to detect when stuck
+# ============================================================================
+
+_LAST_MAP_STATE = None
+_STUCK_COUNTER = 0
+_LAST_PRIORITY_USED = None
+
+# Movement tracking for adaptive priorities
+_MOVEMENT_HISTORY = []  # List of recent movements
+_CURRENT_PHASE = 0  # Current navigation phase
+_PHASE_MOVE_COUNT = 0  # Moves in current phase
+
+def _get_map_state_hash(state_data):
+    """Generate a simple hash of the current map state to detect if stuck."""
+    try:
+        map_info = state_data.get('map', {})
+        player = state_data.get('player', {})
+        position = player.get('position', {})
+        
+        # Create a simple string representation of position + nearby tiles
+        pos_x = position.get('x', 0)
+        pos_y = position.get('y', 0)
+        location = map_info.get('location_name', '')
+        
+        return f"{location}_{pos_x}_{pos_y}"
+    except:
+        return None
+
+def _is_stuck(state_data):
+    """Check if we're stuck (same map state as last time)."""
+    global _LAST_MAP_STATE, _STUCK_COUNTER
+    
+    current_state = _get_map_state_hash(state_data)
+    if current_state == _LAST_MAP_STATE:
+        _STUCK_COUNTER += 1
+        print(f"[PHASE 6 STUCK] Stuck counter: {_STUCK_COUNTER}")
+    else:
+        _STUCK_COUNTER = 0
+        _LAST_MAP_STATE = current_state
+    
+    # Check if stuck (same position for 1+ iterations) OR all directions blocked
+    if _STUCK_COUNTER >= 1:
+        print("[PHASE 6 STUCK] ⚠️ DETECTED: Same position multiple times")
+        return True
+    
+    # Also check if player is completely surrounded (all 4 directions blocked)
+    try:
+        map_info = state_data.get('map', {})
+        raw_tiles = map_info.get('tiles', [])
+        if raw_tiles and len(raw_tiles) > 0:
+            # Player is at center
+            center = len(raw_tiles) // 2
+            if center > 0 and center < len(raw_tiles) and len(raw_tiles[center]) > center:
+                up = raw_tiles[center - 1][center] if center > 0 else None
+                down = raw_tiles[center + 1][center] if center < len(raw_tiles) - 1 else None
+                left = raw_tiles[center][center - 1] if center > 0 else None
+                right = raw_tiles[center][center + 1] if center < len(raw_tiles[0]) - 1 else None
+                
+                # Check if all blocked
+                blocked_count = 0
+                for tile in [up, down, left, right]:
+                    if tile and len(tile) >= 3:
+                        collision = tile[2]
+                        if collision != 0:  # Blocked
+                            blocked_count += 1
+                
+                if blocked_count >= 3:
+                    print(f"[PHASE 6 STUCK] ⚠️ DETECTED: {blocked_count}/4 directions blocked")
+                    return True
+    except Exception as e:
+        print(f"[PHASE 6 STUCK] Error checking surroundings: {e}")
+    
+    return False
+
+def _reset_stuck():
+    """Reset stuck detection after taking corrective action."""
+    global _STUCK_COUNTER
+    _STUCK_COUNTER = 0
+
+
+def _track_movement(action_string: str):
+    """Track movements from an action string to help with adaptive priorities."""
+    global _MOVEMENT_HISTORY, _PHASE_MOVE_COUNT
+    
+    if not action_string:
+        return
+    
+    # Extract movement commands from action string
+    movements = []
+    for action in action_string.split(','):
+        action = action.strip().upper()
+        if action in ['UP', 'DOWN', 'LEFT', 'RIGHT']:
+            movements.append(action)
+    
+    # Add to history (keep last 100 moves)
+    _MOVEMENT_HISTORY.extend(movements)
+    _MOVEMENT_HISTORY = _MOVEMENT_HISTORY[-100:]
+    _PHASE_MOVE_COUNT += len(movements)
+    
+    print(f"[PHASE 6 MOVEMENT] Tracked {len(movements)} moves, phase count: {_PHASE_MOVE_COUNT}")
+
+
+def _get_dominant_direction():
+    """Get the direction we've been moving most recently (last 10 moves)."""
+    if len(_MOVEMENT_HISTORY) < 5:
+        return None
+    
+    recent = _MOVEMENT_HISTORY[-10:]
+    counts = {}
+    for move in recent:
+        counts[move] = counts.get(move, 0) + 1
+    
+    if not counts:
+        return None
+    
+    dominant = max(counts.items(), key=lambda x: x[1])
+    return dominant[0] if dominant[1] >= 3 else None
+
+
+def _advance_phase():
+    """Advance to next navigation phase and reset counter."""
+    global _CURRENT_PHASE, _PHASE_MOVE_COUNT
+    _CURRENT_PHASE += 1
+    _PHASE_MOVE_COUNT = 0
+    print(f"[PHASE 6 ADAPTIVE] Advanced to phase {_CURRENT_PHASE}")
+
+
+def _reset_phases():
+    """Reset phases when changing contexts (e.g., entering new location)."""
+    global _CURRENT_PHASE, _PHASE_MOVE_COUNT, _MOVEMENT_HISTORY
+    _CURRENT_PHASE = 0
+    _PHASE_MOVE_COUNT = 0
+    _MOVEMENT_HISTORY = []
+    print("[PHASE 6 ADAPTIVE] Reset all phases")
+
+
+# ============================================================================
 # PHASE 6 CONFIGURATION
 # ============================================================================
 
@@ -53,6 +190,405 @@ def _is_objective_completed(objectives, objective_id: str) -> bool:
 # ============================================================================
 # PATHFINDING UTILITIES
 # ============================================================================
+
+# Direction definitions for generalized pathfinding
+DIRECTION_FILTERS = {
+    'NORTH': lambda px, py, tx, ty: ty >= py + 2,
+    'SOUTH': lambda px, py, tx, ty: ty <= py - 2,
+    'EAST': lambda px, py, tx, ty: tx >= px + 2,
+    'WEST': lambda px, py, tx, ty: tx <= px - 2,
+    'NORTHEAST': lambda px, py, tx, ty: tx > px and (ty >= py + 2 or tx >= px + 2),
+    'NORTHWEST': lambda px, py, tx, ty: tx < px and (ty >= py + 2 or tx <= px - 2),
+    'SOUTHEAST': lambda px, py, tx, ty: tx > px and (ty <= py - 2 or tx >= px + 2),
+    'SOUTHWEST': lambda px, py, tx, ty: tx < px and (ty <= py - 2 or tx <= px - 2),
+}
+
+DIRECTION_SCORING = {
+    # Cardinal directions: prefer staying on same row/column
+    'NORTH': lambda px, py, tx, ty: ((ty - py) * 1000000) - (abs(tx - px) * 1000),
+    'SOUTH': lambda px, py, tx, ty: ((py - ty) * 1000000) - (abs(tx - px) * 1000),
+    'EAST': lambda px, py, tx, ty: ((tx - px) * 1000000) - (abs(ty - py) * 1000),
+    'WEST': lambda px, py, tx, ty: ((px - tx) * 1000000) - (abs(ty - py) * 1000),
+    # Diagonal directions: prioritize primary direction
+    'NORTHEAST': lambda px, py, tx, ty: ((ty - py) * 100000) + ((tx - px) * 1000),
+    'NORTHWEST': lambda px, py, tx, ty: ((ty - py) * 100000) + ((px - tx) * 1000),
+    'SOUTHEAST': lambda px, py, tx, ty: ((py - ty) * 100000) + ((tx - px) * 1000),
+    'SOUTHWEST': lambda px, py, tx, ty: ((py - ty) * 100000) + ((px - tx) * 1000),
+}
+
+
+def _is_dead_end(grid, pos, direction: str) -> bool:
+    """
+    Check if a position is a dead end (has very limited walkable neighbors).
+    
+    Args:
+        grid: 2D grid
+        pos: (x, y) position to check
+        direction: The direction we approached from (to allow backward movement)
+    
+    Returns:
+        True if position is a dead end (< 2 walkable neighbors in forward directions)
+    """
+    if not grid or not pos:
+        return False
+    
+    height = len(grid)
+    width = len(grid[0]) if grid else 0
+    x, y = pos
+    
+    if not (0 <= x < width and 0 <= y < height):
+        return False
+    
+    # Count walkable neighbors in forward directions
+    # (not counting the direction we came from)
+    forward_walkable = 0
+    
+    # Define which directions are "forward" based on our approach direction
+    check_directions = []
+    if direction in ['NORTH', 'NORTHEAST', 'NORTHWEST']:
+        # Going north - check north, east, west (not south)
+        check_directions = [(0, -1), (1, 0), (-1, 0)]
+    elif direction in ['SOUTH', 'SOUTHEAST', 'SOUTHWEST']:
+        # Going south - check south, east, west (not north)
+        check_directions = [(0, 1), (1, 0), (-1, 0)]
+    elif direction == 'EAST':
+        # Going east - check east, north, south (not west)
+        check_directions = [(1, 0), (0, -1), (0, 1)]
+    elif direction == 'WEST':
+        # Going west - check west, north, south (not east)
+        check_directions = [(-1, 0), (0, -1), (0, 1)]
+    else:
+        # Default: check all directions
+        check_directions = [(0, -1), (0, 1), (-1, 0), (1, 0)]
+    
+    for dx, dy in check_directions:
+        nx, ny = x + dx, y + dy
+        if 0 <= nx < width and 0 <= ny < height:
+            tile = grid[ny][nx]
+            # Walkable tiles
+            if tile not in ['#', 'W', ' ', None]:
+                forward_walkable += 1
+    
+    # Dead end if < 2 forward walkable neighbors
+    is_dead_end = forward_walkable < 2
+    
+    if is_dead_end:
+        print(f"[PHASE 6 DEADEND] Position ({x}, {y}) is a dead end (only {forward_walkable} forward paths)")
+    
+    return is_dead_end
+
+
+def _path_to_direction(state_data, direction: str, location_name: str = '') -> List[str]:
+    """
+    Generic pathfinding for a single direction.
+    Supports: NORTH, SOUTH, EAST, WEST, NORTHEAST, NORTHWEST, SOUTHEAST, SOUTHWEST
+    Returns empty list if direction is blocked.
+    """
+    if direction not in DIRECTION_FILTERS:
+        print(f"[PHASE 6 PATHFINDING] Invalid direction: {direction}")
+        return []
+    
+    if not state_data:
+        return []
+    
+    try:
+        from utils.map_formatter import format_map_grid
+        from utils.state_formatter import astar_pathfind
+        
+        # Get player info
+        player_data = state_data.get('player', {})
+        player_position = player_data.get('position', {})
+        player_coords = (int(player_position.get('x', 0)), int(player_position.get('y', 0)))
+        
+        # Get map data
+        map_info = state_data.get('map', {})
+        raw_tiles = map_info.get('tiles', [])
+        npcs = map_info.get('npcs', [])
+        
+        if not raw_tiles:
+            return []
+        
+        # Generate grid
+        grid = format_map_grid(raw_tiles, "South", npcs, player_coords, location_name=location_name)
+        
+        if not grid:
+            return []
+        
+        grid_height = len(grid)
+        grid_width = len(grid[0]) if grid else 0
+        
+        # Find player on grid
+        player_grid_x = None
+        player_y_idx = None
+        player_visual_y = None
+        for y_idx, row in enumerate(grid):
+            for x_idx, symbol in enumerate(row):
+                if symbol == 'P':
+                    player_grid_x = x_idx
+                    player_y_idx = y_idx
+                    player_visual_y = grid_height - 1 - y_idx
+                    break
+            if player_grid_x is not None:
+                break
+        
+        if player_grid_x is None:
+            return []
+        
+        # Find walkable tiles matching direction filter
+        walkable_tiles = ['.', '~', 'S']
+        candidates = []
+        direction_filter = DIRECTION_FILTERS[direction]
+        direction_score = DIRECTION_SCORING[direction]
+        
+        for y_idx, row in enumerate(grid):
+            for x_idx, symbol in enumerate(row):
+                if symbol in walkable_tiles:
+                    grid_y = grid_height - 1 - y_idx
+                    
+                    # Apply direction filter
+                    if direction_filter(player_grid_x, player_visual_y, x_idx, grid_y):
+                        score = direction_score(player_grid_x, player_visual_y, x_idx, grid_y)
+                        candidates.append((score, (x_idx, y_idx)))
+        
+        candidates.sort(reverse=True, key=lambda x: x[0])
+        
+        if len(candidates) == 0:
+            return []
+        
+        # Try to path to candidates, checking for dead ends
+        for i, (score, goal_pos) in enumerate(candidates[:20]):
+            path = astar_pathfind(grid, (player_grid_x, player_y_idx), goal_pos, location_name)
+            if path and len(path) > 0:
+                # Check if destination is a dead end
+                if _is_dead_end(grid, goal_pos, direction):
+                    print(f"[PHASE 6 PATHFINDING] ⚠️ Candidate #{i+1} is a dead end, skipping")
+                    continue
+                return path
+        
+        return []
+        
+    except Exception as e:
+        import traceback
+        print(f"[PHASE 6 PATHFINDING ERROR] {e}")
+        traceback.print_exc()
+        return []
+
+
+def _parse_priority_with_coefficients(priority_str: str) -> Tuple[str, Dict[str, float]]:
+    """
+    Parse priority string with optional coefficients.
+    
+    Examples:
+        "NORTHEAST" -> ("NORTHEAST", {})
+        "N2E3" -> ("NORTHEAST", {"NORTH": 2.0, "EAST": 3.0})
+        "N1.5W7" -> ("NORTHWEST", {"NORTH": 1.5, "WEST": 7.0})
+    
+    Returns:
+        (direction, coefficients_dict)
+    """
+    import re
+    
+    # Simple direction (no coefficients)
+    if priority_str in DIRECTION_FILTERS:
+        return priority_str, {}
+    
+    # Parse coefficients like N2E3, N1.5W7, etc.
+    direction_map = {
+        'N': 'NORTH',
+        'S': 'SOUTH',
+        'E': 'EAST',
+        'W': 'WEST'
+    }
+    
+    # Extract direction letters and their coefficients
+    # Pattern: N2E3 -> [('N', '2'), ('E', '3')]
+    matches = re.findall(r'([NSEW])(\d+\.?\d*)', priority_str.upper())
+    
+    if not matches:
+        return priority_str, {}
+    
+    # Build direction name and coefficients
+    direction_parts = []
+    coefficients = {}
+    
+    for letter, coeff in matches:
+        full_dir = direction_map[letter]
+        direction_parts.append(letter)
+        coefficients[full_dir] = float(coeff)
+    
+    # Determine combined direction
+    direction_str = ''.join(direction_parts)
+    direction_name = {
+        'N': 'NORTH',
+        'S': 'SOUTH',
+        'E': 'EAST',
+        'W': 'WEST',
+        'NE': 'NORTHEAST',
+        'NW': 'NORTHWEST',
+        'SE': 'SOUTHEAST',
+        'SW': 'SOUTHWEST',
+    }.get(direction_str, priority_str)
+    
+    return direction_name, coefficients
+
+
+def _apply_movement_coefficients(path: List[str], coefficients: Dict[str, float]) -> List[str]:
+    """
+    Apply coefficients to ADD extra movements at the end of the path.
+    
+    Example:
+        path = ['UP', 'UP', 'RIGHT', 'RIGHT', 'RIGHT']
+        coefficients = {'NORTH': 1.5, 'EAST': 2.0}
+        
+        Original: 2 UPs, 3 RIGHTs
+        Extra: ceil(2 * 0.5) = 1 UP, ceil(3 * 1.0) = 3 RIGHTs
+        Result: ['UP', 'UP', 'RIGHT', 'RIGHT', 'RIGHT', 'UP', 'RIGHT', 'RIGHT', 'RIGHT']
+    """
+    if not coefficients:
+        return path
+    
+    import math
+    
+    direction_to_movement = {
+        'NORTH': 'UP',
+        'SOUTH': 'DOWN',
+        'EAST': 'RIGHT',
+        'WEST': 'LEFT'
+    }
+    
+    # Count movements in each direction
+    movement_counts = {}
+    for move in path:
+        movement_counts[move] = movement_counts.get(move, 0) + 1
+    
+    print(f"[PHASE 6 PATHFINDING] Original path counts: {movement_counts}")
+    print(f"[PHASE 6 PATHFINDING] Applying coefficients: {coefficients}")
+    
+    # Calculate extra movements to add
+    extra_movements = []
+    for direction, coeff in coefficients.items():
+        movement = direction_to_movement.get(direction)
+        if movement and movement in movement_counts:
+            original_count = movement_counts[movement]
+            # Extra movements = original * (coeff - 1.0), rounded up
+            extra_count = math.ceil(original_count * (coeff - 1.0))
+            if extra_count > 0:
+                extra_movements.extend([movement] * extra_count)
+                print(f"[PHASE 6 PATHFINDING] {movement}: {original_count} + {extra_count} extra ({coeff}x)")
+    
+    # Return original path + extra movements at the end
+    result = path + extra_movements
+    print(f"[PHASE 6 PATHFINDING] Final path length: {len(path)} -> {len(result)}")
+    return result
+
+
+def _get_zigzag_pattern(direction: str, length: int = 8) -> List[str]:
+    """
+    Get a zigzag pattern to avoid getting stuck when going in diagonal directions.
+    
+    Patterns designed to always progress in the target direction without backtracking:
+    - NORTHEAST: UP, UP, RIGHT, DOWN (net: UP, RIGHT, progress northeast)
+    - NORTHWEST: UP, UP, LEFT, DOWN (net: UP, LEFT, progress northwest)  
+    - SOUTHEAST: DOWN, DOWN, RIGHT, UP (net: DOWN, RIGHT, progress southeast)
+    - SOUTHWEST: DOWN, DOWN, LEFT, UP (net: DOWN, LEFT, progress southwest)
+    """
+    patterns = {
+        'NORTHEAST': ['UP', 'UP', 'RIGHT', 'DOWN'],
+        'NORTHWEST': ['UP', 'UP', 'LEFT', 'DOWN'],
+        'SOUTHEAST': ['DOWN', 'DOWN', 'RIGHT', 'UP'],
+        'SOUTHWEST': ['DOWN', 'DOWN', 'LEFT', 'UP'],
+        # For cardinal directions, just repeat the movement
+        'NORTH': ['UP', 'UP', 'UP', 'UP'],
+        'SOUTH': ['DOWN', 'DOWN', 'DOWN', 'DOWN'],
+        'EAST': ['RIGHT', 'RIGHT', 'RIGHT', 'RIGHT'],
+        'WEST': ['LEFT', 'LEFT', 'LEFT', 'LEFT'],
+    }
+    
+    base_pattern = patterns.get(direction, ['UP'])
+    # Repeat pattern to reach desired length
+    result = []
+    while len(result) < length:
+        result.extend(base_pattern)
+    
+    return result[:length]
+
+
+def _path_with_priority_list(state_data, priority_list: List[str], location_name: str = '') -> str:
+    """
+    Generalized pathfinding with priority list and optional coefficients.
+    
+    Tries each direction/target in order until one succeeds.
+    Detects if stuck and applies corrective actions (B presses + secondary priority).
+    
+    Supported directions:
+    - Cardinal: NORTH, SOUTH, EAST, WEST
+    - Diagonal: NORTHEAST, NORTHWEST, SOUTHEAST, SOUTHWEST
+    - With coefficients: N2E3 (2x north, 3x east), N1.5W7 (1.5x north, 7x west)
+    - Special: DOOR_NORTH, DOOR_NORTHEAST, etc. (future)
+    
+    Examples:
+        _path_with_priority_list(state_data, ['NORTHEAST', 'WEST'], location_name)
+        _path_with_priority_list(state_data, ['N2E3', 'N2W7'], location_name)
+    """
+    global _LAST_PRIORITY_USED
+    
+    print(f"[PHASE 6 PATHFINDING] Priority list: {priority_list}")
+    
+    # Check if stuck
+    stuck = _is_stuck(state_data)
+    if stuck:
+        print("[PHASE 6 PATHFINDING] ⚠️ STUCK DETECTED! Using zigzag recovery")
+        _reset_stuck()
+        
+        # Use zigzag pattern in primary direction to escape
+        primary = priority_list[0] if priority_list else 'NORTH'
+        direction, _ = _parse_priority_with_coefficients(primary)
+        
+        # Longer zigzag for stuck situations (16 moves)
+        zigzag = _get_zigzag_pattern(direction, length=16)
+        action = f"B, B, B, {', '.join(zigzag)}, A"
+        print(f"[PHASE 6 PATHFINDING] Zigzag recovery ({direction}): {action}")
+        _LAST_PRIORITY_USED = f"STUCK_ZIGZAG_{direction}"
+        return f"\nSuggested action (STUCK - zigzag {direction}): {action}"
+    
+    # Try each priority in order
+    for i, priority in enumerate(priority_list):
+        # Handle special targets (doors, etc.)
+        if priority.startswith('DOOR_'):
+            # TODO: Implement door pathfinding
+            continue
+        
+        # Parse direction and coefficients
+        direction, coefficients = _parse_priority_with_coefficients(priority)
+        
+        # Handle directional pathfinding
+        print(f"[PHASE 6 PATHFINDING] Trying {priority} -> direction={direction}, coefficients={coefficients}")
+        path = _path_to_direction(state_data, direction, location_name)
+        
+        if path and len(path) > 0:
+            print(f"[PHASE 6 PATHFINDING] ✓ Found base path: {path}")
+            
+            # Apply coefficients to amplify movements
+            if coefficients:
+                path = _apply_movement_coefficients(path, coefficients)
+                print(f"[PHASE 6 PATHFINDING] ✓ Amplified path: {path}")
+            
+            path.append('A')
+            action = ', '.join(path)
+            _LAST_PRIORITY_USED = priority
+            return f"\nSuggested action (priority: {priority}): {action}"
+        else:
+            print(f"[PHASE 6 PATHFINDING] ✗ {priority} blocked")
+    
+    # All priorities failed - use zigzag fallback for primary direction
+    print("[PHASE 6 PATHFINDING] ⚠️ All priorities failed, using zigzag fallback")
+    primary = priority_list[0] if priority_list else 'NORTH'
+    direction, _ = _parse_priority_with_coefficients(primary)
+    zigzag = _get_zigzag_pattern(direction, length=8)
+    zigzag.append('A')
+    action = ', '.join(zigzag)
+    _LAST_PRIORITY_USED = f"ZIGZAG_FALLBACK_{primary}"
+    return f"\nSuggested action (ZIGZAG fallback - {primary}): {action}"
 
 def _get_full_path_to_direction(state_data, target_direction: str, location_name: str = '') -> List[str]:
     """
@@ -303,6 +839,115 @@ def _find_door_and_path(state_data, location_name: str, door_filter: str = 'any'
         return ""
 
 
+def _get_route_104_northeast_path(state_data, location_name: str = '') -> str:
+    """
+    Route 104 specific pathfinding: Target NORTHEAST corner.
+    Prioritizes NORTH over EAST in scoring.
+    If northeast fails, try FAR WEST as backup.
+    """
+    print("[PHASE 6] Route 104 custom pathfinding: targeting NORTHEAST")
+    
+    if not state_data:
+        return ""
+    
+    try:
+        from utils.map_formatter import format_map_grid
+        from utils.state_formatter import astar_pathfind
+        
+        # Get player info
+        player_data = state_data.get('player', {})
+        player_position = player_data.get('position', {})
+        player_coords = (int(player_position.get('x', 0)), int(player_position.get('y', 0)))
+        
+        # Get map data
+        map_info = state_data.get('map', {})
+        raw_tiles = map_info.get('tiles', [])
+        npcs = map_info.get('npcs', [])
+        
+        if not raw_tiles:
+            return ""
+        
+        # Generate grid
+        grid = format_map_grid(raw_tiles, "South", npcs, player_coords, location_name=location_name)
+        
+        if not grid:
+            return ""
+        
+        grid_height = len(grid)
+        grid_width = len(grid[0]) if grid else 0
+        
+        # Find player on grid
+        player_grid_x = None
+        player_y_idx = None
+        player_visual_y = None
+        for y_idx, row in enumerate(grid):
+            for x_idx, symbol in enumerate(row):
+                if symbol == 'P':
+                    player_grid_x = x_idx
+                    player_y_idx = y_idx
+                    player_visual_y = grid_height - 1 - y_idx
+                    break
+            if player_grid_x is not None:
+                break
+        
+        if player_grid_x is None:
+            return ""
+        
+        # Find walkable tiles in NORTHEAST direction
+        # MUST be EAST of player (not west!)
+        # Score: prioritize NORTH first, then EAST
+        # Score = (Y * 100000) + (X * 1000)
+        walkable_tiles = ['.', '~', 'S']
+        candidates = []
+        
+        for y_idx, row in enumerate(grid):
+            for x_idx, symbol in enumerate(row):
+                if symbol in walkable_tiles:
+                    grid_y = grid_height - 1 - y_idx
+                    
+                    # Must be EAST of player (x_idx > player_grid_x)
+                    # And either north OR east by at least 2 tiles
+                    if x_idx > player_grid_x and (grid_y >= player_visual_y + 2 or x_idx >= player_grid_x + 2):
+                        # Score: prioritize NORTH (Y) over EAST (X)
+                        north_score = (grid_y - player_visual_y) * 100000
+                        east_score = (x_idx - player_grid_x) * 1000
+                        score = north_score + east_score
+                        candidates.append((score, (x_idx, y_idx)))
+        
+        candidates.sort(reverse=True, key=lambda x: x[0])
+        
+        print(f"[PHASE 6 ROUTE 104] Found {len(candidates)} northeast candidates")
+        if len(candidates) > 0:
+            print(f"[PHASE 6 ROUTE 104] Top 3 candidates:")
+            for i, (score, pos) in enumerate(candidates[:3]):
+                visual_y = grid_height - 1 - pos[1]
+                print(f"  #{i+1}: score={score}, pos=({pos[0]}, {visual_y})")
+        
+        # Try to path to candidates
+        for i, (score, goal_pos) in enumerate(candidates[:20]):
+            path = astar_pathfind(grid, (player_grid_x, player_y_idx), goal_pos, location_name)
+            if path and len(path) > 0:
+                print(f"[PHASE 6 ROUTE 104] ✓ Found northeast path: {path}")
+                path.append('A')
+                return f"\nSuggested action: {', '.join(path)}"
+        
+        # Backup: try FAR WEST
+        print("[PHASE 6 ROUTE 104] Northeast blocked, trying FAR WEST")
+        west_path = _get_full_path_to_direction(state_data, 'LEFT', location_name)
+        if west_path and len(west_path) > 0:
+            west_path.append('A')
+            return f"\nSuggested action: {', '.join(west_path)}"
+        
+        # Ultimate fallback
+        return "\nSuggested action: UP, A"
+        
+    except Exception as e:
+        import traceback
+        print(f"[PHASE 6 ROUTE 104 PATHFINDING ERROR] {e}")
+        traceback.print_exc()
+        return "\nSuggested action: UP, A"
+
+
 def _get_battle_action() -> str:
     """Return randomized battle sequence (33/33/33 split)."""
     import random
@@ -321,18 +966,56 @@ def _get_battle_action() -> str:
 
 def _handle_route_104_north(state_data, objectives, location_name: str) -> Tuple[str, str]:
     """
-    Route 104 North navigation.
-    Priority: EAST -> NORTH -> WEST (heading to Rustboro City)
+    Route 104 North navigation with adaptive phases.
+    
+    Each phase targets a direction in the CURRENT window:
+    - Phase 0: NORTHEAST (1 screen, ~10 moves)
+    - Phase 1: EAST (2 screens, ~20 moves)
+    - Phase 2: NORTH (1 screen, ~10 moves)
+    - Phase 3: WEST (1 screen, ~10 moves)
+    - Phase 4: NORTH (3 screens, ~30 moves)
     """
-    print("[PHASE 6] _handle_route_104_north called")
+    global _CURRENT_PHASE, _PHASE_MOVE_COUNT
+    
+    print(f"[PHASE 6] _handle_route_104_north called (Phase {_CURRENT_PHASE}, moves: {_PHASE_MOVE_COUNT})")
+    
+    # Each phase = one target direction within current window
+    phases = [
+        {'name': 'Northeast 1 screen', 'threshold': 10, 'targets': ['NORTHEAST', 'NORTH', 'EAST']},
+        {'name': 'East 2 screens', 'threshold': 20, 'targets': ['EAST', 'NORTHEAST', 'SOUTHEAST']},
+        {'name': 'North 1 screen', 'threshold': 10, 'targets': ['NORTH', 'NORTHEAST', 'NORTHWEST']},
+        {'name': 'West 1 screen', 'threshold': 10, 'targets': ['WEST', 'NORTHWEST', 'SOUTHWEST']},
+        {'name': 'North 3 screens', 'threshold': 999, 'targets': ['NORTH', 'NORTHEAST', 'NORTHWEST']},
+    ]
+    
+    # Clamp phase to valid range
+    if _CURRENT_PHASE >= len(phases):
+        _CURRENT_PHASE = len(phases) - 1
+    
+    current_phase_config = phases[_CURRENT_PHASE]
+    targets = current_phase_config['targets']
+    threshold = current_phase_config['threshold']
+    
+    print(f"[PHASE 6 ROUTE 104] Phase: {current_phase_config['name']}, Targets: {targets}")
+    
+    # Check if we should advance to next phase
+    if _PHASE_MOVE_COUNT >= threshold:
+        _advance_phase()
+        # Recursive call with new phase
+        return _handle_route_104_north(state_data, objectives, location_name)
     
     prompt = """🎮 PHASE 6: Road to Rustboro City
 
 📍 ROUTE 104 NORTH
-- Follow the suggested action
+- Follow the suggested action EXACTLY. DO NOT TRY AND CHANGE IT YOURSELF.
 - CHAIN THE ENTIRE ACTION SEQUENCE"""
     
-    action = _path_with_directional_priority(state_data, location_name, ['EAST', 'NORTH', 'WEST'])
+    # Use directional A* with target priorities
+    action = _path_with_priority_list(state_data, targets, location_name)
+    
+    # Track this movement for adaptive priority
+    _track_movement(action)
+    
     print(f"[PHASE 6] Route 104 North final action: {action}")
     return prompt, action
 
@@ -340,27 +1023,44 @@ def _handle_route_104_north(state_data, objectives, location_name: str) -> Tuple
 def _handle_rustboro_low_hp(state_data, objectives, location_name: str) -> Tuple[str, str]:
     """
     Rustboro City with low HP - need to heal at Pokemon Center.
-    Path: NORTH 20 tiles -> Enter northeast door (Pokemon Center) -> Heal
+    Adaptive phases:
+    - Phase 0: Go NORTH for ~20 moves (2 screens)
+    - Phase 1: Enter closest door (Pokemon Center)
     """
+    global _CURRENT_PHASE, _PHASE_MOVE_COUNT
+    
+    print(f"[PHASE 6 RUSTBORO LOW HP] Phase {_CURRENT_PHASE}, moves: {_PHASE_MOVE_COUNT}")
+    
     prompt = """🎮 PHASE 6: Rustboro City
 
 📍 RUSTBORO CITY - LOW HP
 - Follow the suggested action
 - CHAIN THE ENTIRE ACTION SEQUENCE"""
     
-    # Path NORTH, then to northeast door, then healing sequence
-    action = _find_door_and_path(
-        state_data, 
-        location_name, 
-        door_filter='northeast',
-        append_sequence=['UP', 'UP', 'UP', 'UP', 'A', 'A', 'A', 'A', 'A', 'A', 'A']
-    )
+    # Phase 0: Go north for 2 screens
+    if _CURRENT_PHASE == 0:
+        if _PHASE_MOVE_COUNT >= 20:
+            _advance_phase()
+            return _handle_rustboro_low_hp(state_data, objectives, location_name)
+        
+        action = _path_with_priority_list(state_data, ['NORTH', 'NORTHEAST', 'NORTHWEST'], location_name)
+        _track_movement(action)
+        return prompt, action
     
-    if not action:
-        # Fallback: just go north
-        action = _path_with_directional_priority(state_data, location_name, ['NORTH'])
-    
-    return prompt, action
+    # Phase 1: Find and enter door with healing sequence
+    else:
+        action = _find_door_and_path(
+            state_data, 
+            location_name, 
+            door_filter='any',
+            append_sequence=['UP', 'UP', 'UP', 'UP', 'A', 'A', 'A', 'A', 'A', 'A', 'A']
+        )
+        
+        if not action:
+            # Still go north if door not found
+            action = _path_with_priority_list(state_data, ['NORTH'], location_name)
+        
+        return prompt, action
 
 
 def _handle_rustboro_pokemon_center(state_data, objectives, location_name: str) -> Tuple[str, str]:
@@ -381,27 +1081,44 @@ def _handle_rustboro_pokemon_center(state_data, objectives, location_name: str) 
 def _handle_rustboro_full_hp(state_data, objectives, location_name: str) -> Tuple[str, str]:
     """
     Rustboro City with full HP - head to gym.
-    Go EAST ~6 tiles, then enter the nearest door (gym).
+    Adaptive phases:
+    - Phase 0: Go NORTH for ~20 moves (2 screens)
+    - Phase 1: Enter closest door (Gym)
     """
+    global _CURRENT_PHASE, _PHASE_MOVE_COUNT
+    
+    print(f"[PHASE 6 RUSTBORO FULL HP] Phase {_CURRENT_PHASE}, moves: {_PHASE_MOVE_COUNT}")
+    
     prompt = """🎮 PHASE 6: Rustboro City
 
 📍 RUSTBORO CITY - FULL HP
 - Follow the suggested action
 - CHAIN THE ENTIRE ACTION SEQUENCE"""
     
-    # Find door after going east
-    action = _find_door_and_path(
-        state_data,
-        location_name,
-        door_filter='east',
-        append_sequence=['UP', 'UP', 'UP', 'UP', 'A', 'A', 'A', 'A', 'A', 'A', 'A']
-    )
+    # Phase 0: Go north for 2 screens
+    if _CURRENT_PHASE == 0:
+        if _PHASE_MOVE_COUNT >= 20:
+            _advance_phase()
+            return _handle_rustboro_full_hp(state_data, objectives, location_name)
+        
+        action = _path_with_priority_list(state_data, ['NORTH', 'NORTHEAST', 'NORTHWEST'], location_name)
+        _track_movement(action)
+        return prompt, action
     
-    if not action:
-        # Fallback: just go east
-        action = _path_with_directional_priority(state_data, location_name, ['EAST'])
-    
-    return prompt, action
+    # Phase 1: Find and enter door (gym entrance)
+    else:
+        action = _find_door_and_path(
+            state_data,
+            location_name,
+            door_filter='any',
+            append_sequence=[]  # No extra sequence for gym entrance
+        )
+        
+        if not action:
+            # Still go north if door not found
+            action = _path_with_priority_list(state_data, ['NORTH'], location_name)
+        
+        return prompt, action
 
 
 def _handle_rustboro_gym_before_badge(state_data, objectives, location_name: str) -> Tuple[str, str]:
@@ -488,7 +1205,7 @@ def _handle_petalburg(state_data, objectives, location_name: str) -> Tuple[str, 
 - Follow the suggested action
 - CHAIN THE ENTIRE ACTION SEQUENCE"""
     
-    action = _path_with_directional_priority(state_data, location_name, ['WEST'])
+    action = _path_with_priority_list(state_data, ['WEST'], location_name)
     return prompt, action
 
 
